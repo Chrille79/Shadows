@@ -21,6 +21,7 @@ const INSTANCE_FLOATS = 12; // pos(2) + size(2) + uvOffset(2) + uvScale(2) + tin
 const INSTANCE_BYTE_SIZE = INSTANCE_FLOATS * 4;
 
 export interface SpriteRenderer {
+  beginFrame(): void;
   drawSprite(sprite: SpriteInstance): void;
   flush(pass: GPURenderPassEncoder): void;
   flushWithTexture(pass: GPURenderPassEncoder, bindGroup: GPUBindGroup): void;
@@ -132,8 +133,8 @@ export function createSpriteRenderer(renderer: Renderer): SpriteRenderer {
 
   // Sampler
   const sampler = device.createSampler({
-    magFilter: 'linear',
-    minFilter: 'linear',
+    magFilter: 'nearest',
+    minFilter: 'nearest',
   });
 
   function createTextureBindGroup(texture: GPUTexture): GPUBindGroup {
@@ -151,11 +152,12 @@ export function createSpriteRenderer(renderer: Renderer): SpriteRenderer {
   const defaultBindGroup = createTextureBindGroup(whiteTexture);
 
   let spriteCount = 0;
+  let bufferOffset = 0; // running offset into instance buffer per frame
 
   function drawSprite(sprite: SpriteInstance) {
-    if (spriteCount >= MAX_SPRITES) return;
+    if (bufferOffset + spriteCount >= MAX_SPRITES) return;
 
-    const i = spriteCount * INSTANCE_FLOATS;
+    const i = (bufferOffset + spriteCount) * INSTANCE_FLOATS;
     instanceData[i + 0] = sprite.x;
     instanceData[i + 1] = sprite.y;
     instanceData[i + 2] = sprite.width;
@@ -174,15 +176,18 @@ export function createSpriteRenderer(renderer: Renderer): SpriteRenderer {
   function flushWithBindGroup(pass: GPURenderPassEncoder, bindGroup: GPUBindGroup) {
     if (spriteCount === 0) return;
 
-    device.queue.writeBuffer(instanceBuffer, 0, instanceData, 0, spriteCount * INSTANCE_FLOATS);
+    const byteOffset = bufferOffset * INSTANCE_BYTE_SIZE;
+    const floatOffset = bufferOffset * INSTANCE_FLOATS;
+    device.queue.writeBuffer(instanceBuffer, byteOffset, instanceData, floatOffset, spriteCount * INSTANCE_FLOATS);
 
     pass.setPipeline(pipeline);
     pass.setBindGroup(0, bindGroup);
     pass.setVertexBuffer(0, vertexBuffer);
-    pass.setVertexBuffer(1, instanceBuffer);
+    pass.setVertexBuffer(1, instanceBuffer, byteOffset);
     pass.setIndexBuffer(indexBuffer, 'uint16');
     pass.drawIndexed(6, spriteCount);
 
+    bufferOffset += spriteCount;
     spriteCount = 0;
   }
 
@@ -194,5 +199,10 @@ export function createSpriteRenderer(renderer: Renderer): SpriteRenderer {
     flushWithBindGroup(pass, bindGroup);
   }
 
-  return { drawSprite, flush, flushWithTexture, whiteTexture, createTextureBindGroup };
+  function beginFrame() {
+    bufferOffset = 0;
+    spriteCount = 0;
+  }
+
+  return { beginFrame, drawSprite, flush, flushWithTexture, whiteTexture, createTextureBindGroup };
 }

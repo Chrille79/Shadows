@@ -32,7 +32,7 @@ export function createDefaultStage(screenW: number, screenH: number): Stage {
 }
 
 export function renderStage(stage: Stage, sprites: SpriteRenderer, _screenW: number, _screenH: number) {
-  // Platforms (background is now handled by parallax)
+  // Platforms
   for (const p of stage.platforms) {
     // Platform shadow
     sprites.drawSprite({

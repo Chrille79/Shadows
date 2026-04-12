@@ -23,7 +23,7 @@ export async function initRenderer(canvas: HTMLCanvasElement): Promise<Renderer>
   const context = canvas.getContext('webgpu')!;
   const format = navigator.gpu.getPreferredCanvasFormat();
 
-  context.configure({ device, format, alphaMode: 'premultiplied' });
+  context.configure({ device, format, alphaMode: 'opaque' });
 
   // Orthographic projection uniform buffer (mat4x4f = 64 bytes)
   const projectionBuffer = device.createBuffer({
