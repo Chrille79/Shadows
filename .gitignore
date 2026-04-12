@@ -1,0 +1,21 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+
+# Node
+node_modules/
+dist/
+
+# Vite build output (served by .NET)
+Shadows.Server/wwwroot/
+
+# IDE
+.vs/
+.vscode/
+*.swp
+
+# OS
+Thumbs.db
+.DS_Store
