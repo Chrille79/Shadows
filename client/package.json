@@ -6,11 +6,13 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "extract-tiles": "node scripts/extract-tiles.mjs"
   },
   "devDependencies": {
+    "@webgpu/types": "^0.1.60",
+    "pngjs": "^7.0.0",
     "typescript": "^6.0.2",
-    "vite": "^8.0.8",
-    "@webgpu/types": "^0.1.60"
+    "vite": "^8.0.8"
   }
 }

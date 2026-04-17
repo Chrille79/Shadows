@@ -4,9 +4,31 @@ import type { AnimationPlayer } from '../engine/animation';
 import { createAnimation, createAnimationPlayer } from '../engine/animation';
 import type { AtlasData } from '../engine/animation';
 import { loadTexture } from '../engine/textureLoader';
+import type { InputBindings } from './input';
+import { isHeld, wasPressed } from './input';
 
+// Player atlases
 import idleAtlas from '../assets/ninja-spritesheet/idle_right/atlas.json';
 import runAtlas from '../assets/ninja-spritesheet/run_right/atlas.json';
+import jumpAtlas from '../assets/ninja-spritesheet/jump_right/atlas.json';
+
+export interface SpriteSet {
+  atlases: Record<string, AtlasData>;
+  urls: Record<string, string>;
+}
+
+export const PLAYER_SPRITES: SpriteSet = {
+  atlases: {
+    idle: idleAtlas as AtlasData,
+    run: runAtlas as AtlasData,
+    jump: jumpAtlas as AtlasData,
+  },
+  urls: {
+    idle: new URL('../assets/ninja-spritesheet/idle_right/spritesheet.png', import.meta.url).href,
+    run: new URL('../assets/ninja-spritesheet/run_right/spritesheet.png', import.meta.url).href,
+    jump: new URL('../assets/ninja-spritesheet/jump_right/spritesheet.png', import.meta.url).href,
+  },
+};
 
 export interface Character {
   x: number;
@@ -20,20 +42,22 @@ export interface Character {
   animPlayer: AnimationPlayer;
   textureBindGroup: GPUBindGroup | null;
   spriteSize: number;
+  bindings: InputBindings;
+  spriteSet: SpriteSet;
 }
 
 const GRAVITY = 1800;
 const MOVE_SPEED = 400;
-const JUMP_FORCE = -650;
+// Peak jump height = v² / (2g). Targeting 1.5 tiles (198 px) clears one tile
+// comfortably: sqrt(2 * 1800 * 198) ≈ 844 → round up for a little margin.
+const JUMP_FORCE = -845;
 const FRICTION = 0.85;
 
-export function createCharacter(x: number, y: number): Character {
-  const idleAnim = createAnimation('idle', idleAtlas as AtlasData, 12);
-  const runAnim = createAnimation('run', runAtlas as AtlasData, 16);
-
+export function createCharacter(x: number, y: number, bindings: InputBindings, spriteSet: SpriteSet): Character {
   const animPlayer = createAnimationPlayer({
-    idle: idleAnim,
-    run: runAnim,
+    idle: createAnimation('idle', spriteSet.atlases.idle, 12),
+    run: createAnimation('run', spriteSet.atlases.run, 16),
+    jump: createAnimation('jump', spriteSet.atlases.jump, 18),
   });
 
   return {
@@ -45,6 +69,8 @@ export function createCharacter(x: number, y: number): Character {
     animPlayer,
     textureBindGroup: null,
     spriteSize: 128,
+    bindings,
+    spriteSet,
   };
 }
 
@@ -53,44 +79,39 @@ export async function loadCharacterTextures(
   device: GPUDevice,
   sprites: SpriteRenderer,
 ) {
-  // Load idle spritesheet (used for both idle and as default)
-  // We'll switch textures per animation later when needed
-  const idleTexture = await loadTexture(
-    device,
-    new URL('../assets/ninja-spritesheet/idle_right/spritesheet.png', import.meta.url).href,
-  );
-  char.textureBindGroup = sprites.createTextureBindGroup(idleTexture);
+  const uniqueUrls = [...new Set(Object.values(char.spriteSet.urls))];
+  const textures = await Promise.all(uniqueUrls.map((url) => loadTexture(device, url)));
+  const urlToTex = new Map(uniqueUrls.map((url, i) => [url, textures[i]]));
 
-  // Pre-load run texture too
-  const runTexture = await loadTexture(
-    device,
-    new URL('../assets/ninja-spritesheet/run_right/spritesheet.png', import.meta.url).href,
-  );
+  const bindGroups: Record<string, GPUBindGroup> = {};
+  for (const [anim, url] of Object.entries(char.spriteSet.urls)) {
+    bindGroups[anim] = sprites.createTextureBindGroup(urlToTex.get(url)!);
+  }
 
-  // Store both bind groups for switching
-  (char as CharacterInternal)._bindGroups = {
-    idle: sprites.createTextureBindGroup(idleTexture),
-    run: sprites.createTextureBindGroup(runTexture),
-  };
+  for (const anim of ['idle', 'run', 'jump']) {
+    if (!bindGroups[anim]) {
+      bindGroups[anim] = bindGroups.idle;
+    }
+  }
+
+  char.textureBindGroup = bindGroups.idle;
+  (char as CharacterInternal)._bindGroups = bindGroups;
 }
 
 interface CharacterInternal extends Character {
   _bindGroups?: Record<string, GPUBindGroup>;
 }
 
-// Input state
-const keys: Record<string, boolean> = {};
-window.addEventListener('keydown', (e) => { keys[e.code] = true; });
-window.addEventListener('keyup', (e) => { keys[e.code] = false; });
-
 export function updateCharacter(char: Character, dt: number, platforms: Platform[]) {
-  const moving = keys['ArrowLeft'] || keys['KeyA'] || keys['ArrowRight'] || keys['KeyD'];
+  const b = char.bindings;
 
-  // Horizontal movement
-  if (keys['ArrowLeft'] || keys['KeyA']) {
+  // Movement
+  const moving = isHeld(b, 'left') || isHeld(b, 'right');
+
+  if (isHeld(b, 'left')) {
     char.velX = -MOVE_SPEED;
     char.facing = -1;
-  } else if (keys['ArrowRight'] || keys['KeyD']) {
+  } else if (isHeld(b, 'right')) {
     char.velX = MOVE_SPEED;
     char.facing = 1;
   } else {
@@ -98,7 +119,7 @@ export function updateCharacter(char: Character, dt: number, platforms: Platform
   }
 
   // Jump
-  if ((keys['ArrowUp'] || keys['KeyW'] || keys['Space']) && char.grounded) {
+  if (wasPressed(b, 'jump') && char.grounded) {
     char.velY = JUMP_FORCE;
     char.grounded = false;
   }
@@ -110,15 +131,19 @@ export function updateCharacter(char: Character, dt: number, platforms: Platform
   char.x += char.velX * dt;
   char.y += char.velY * dt;
 
-  // Platform collision
+  // Platform collision — only land from above
+  const prevBottom = char.y + char.height - char.velY * dt;
   char.grounded = false;
   for (const p of platforms) {
+    const charBottom = char.y + char.height;
+    const wasAbove = prevBottom <= p.y + 4;
     if (
       char.velY >= 0 &&
+      wasAbove &&
       char.x + char.width > p.x &&
       char.x < p.x + p.width &&
-      char.y + char.height >= p.y &&
-      char.y + char.height <= p.y + p.height + 20
+      charBottom >= p.y &&
+      charBottom <= p.y + p.height + char.velY * dt + 4
     ) {
       char.y = p.y - char.height;
       char.velY = 0;
@@ -126,8 +151,10 @@ export function updateCharacter(char: Character, dt: number, platforms: Platform
     }
   }
 
-  // Animation state
-  if (char.grounded && moving) {
+  // Animation state (priority: jump > run > idle)
+  if (!char.grounded) {
+    char.animPlayer.play('jump');
+  } else if (moving) {
     char.animPlayer.play('run');
   } else {
     char.animPlayer.play('idle');
@@ -142,8 +169,8 @@ export function updateCharacter(char: Character, dt: number, platforms: Platform
   }
 
   // Fall off screen - respawn
-  if (char.y > 2000) {
-    char.x = 960;
+  if (char.y > 3000) {
+    char.x = 200;
     char.y = 100;
     char.velX = 0;
     char.velY = 0;
@@ -154,20 +181,18 @@ export function renderCharacter(char: Character, sprites: SpriteRenderer, pass: 
   const uv = char.animPlayer.getUV();
   const s = char.spriteSize;
 
-  // Center the sprite on the character's hitbox
   const drawX = char.x + char.width / 2 - s / 2;
-  const drawY = char.y + char.height - s;
+  const footOffset = 12;
+  const drawY = char.y + char.height - s + footOffset;
 
-  // Flip UV horizontally when facing left
   const flipX = char.facing === -1;
   const uvX = flipX ? uv.uvX + uv.uvW : uv.uvX;
   const uvW = flipX ? -uv.uvW : uv.uvW;
 
-  if (char.textureBindGroup) {
-    // Flush any pending solid-color sprites first
-    sprites.flush(pass);
+  // Flush any pending sprites from previous layers before switching texture.
+  sprites.flush(pass);
 
-    // Draw the character with its spritesheet texture
+  if (char.textureBindGroup) {
     sprites.drawSprite({
       x: drawX, y: drawY,
       width: s, height: s,
@@ -177,11 +202,12 @@ export function renderCharacter(char: Character, sprites: SpriteRenderer, pass: 
     });
     sprites.flushWithTexture(pass, char.textureBindGroup);
   } else {
-    // Fallback: colored rectangle
+    // Fallback placeholder: flat-color rect using the default (white) bind group.
     sprites.drawSprite({
       x: char.x, y: char.y,
       width: char.width, height: char.height,
       r: 0.2, g: 0.6, b: 1.0, a: 1,
     });
+    sprites.flush(pass);
   }
 }

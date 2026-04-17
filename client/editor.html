@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Shadows — Level Editor</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; background: #1a1a22; color: #eee; font-family: system-ui, sans-serif; overflow: hidden; }
+
+    /* --- Menu bar --- */
+    #menubar {
+      position: fixed; top: 0; left: 0; right: 0; height: 28px;
+      background: #1e1e28; border-bottom: 1px solid #3a3a48;
+      display: flex; align-items: stretch; padding: 0 4px;
+      font-size: 12px; z-index: 20;
+    }
+    .menu { position: relative; display: flex; align-items: stretch; }
+    .menu-label {
+      background: transparent; border: 0; color: #ddd;
+      padding: 0 10px; cursor: pointer; font-size: 12px;
+    }
+    .menu-label:hover, .menu.open .menu-label { background: #2e2e40; }
+    .menu-items {
+      display: none;
+      position: absolute; top: 100%; left: 0;
+      min-width: 180px; background: #23232e; border: 1px solid #3a3a48;
+      border-top: 0; padding: 4px 0; list-style: none; z-index: 30;
+      box-shadow: 0 6px 14px rgba(0,0,0,0.4);
+    }
+    .menu.open .menu-items { display: block; }
+    .menu-items li { display: block; }
+    .menu-items button, .menu-items label {
+      display: block; width: 100%; text-align: left;
+      background: transparent; border: 0; color: #eee;
+      padding: 6px 14px; font-size: 12px; cursor: pointer;
+    }
+    .menu-items button:hover, .menu-items label:hover { background: #3a3a50; }
+    .menu-items .divider {
+      height: 1px; background: #3a3a48; margin: 4px 0;
+    }
+    .check-item {
+      display: flex; align-items: center; gap: 8px;
+      padding: 6px 14px; font-size: 12px; cursor: pointer;
+      user-select: none;
+    }
+    .check-item:hover { background: #3a3a50; }
+    .check-item input { cursor: pointer; }
+    #menubar #status { margin-left: auto; color: #aaa; font-size: 11px; align-self: center; padding-right: 8px; }
+
+    /* --- Toolbar --- */
+    #toolbar {
+      position: fixed; top: 28px; left: 0; right: 0; height: 48px;
+      background: #23232e; border-bottom: 1px solid #3a3a48;
+      display: flex; align-items: center; gap: 6px; padding: 0 8px;
+      z-index: 15;
+    }
+    .icon-btn {
+      background: #2a2a38; color: #ddd; border: 1px solid #3a3a48;
+      width: 36px; height: 36px; border-radius: 4px; cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center;
+      padding: 0;
+    }
+    .icon-btn:hover { background: #34344a; }
+    .icon-btn.active { background: #5a7dd4; border-color: #7a9de4; color: #fff; }
+    .icon-btn svg { width: 20px; height: 20px; fill: currentColor; }
+    #toolbar .sep { width: 1px; height: 24px; background: #3a3a48; margin: 0 4px; }
+    .layer-btn {
+      background: #2a2a38; color: #ddd; border: 1px solid #3a3a48;
+      height: 28px; padding: 0 10px; border-radius: 4px; cursor: pointer;
+      font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
+    }
+    .layer-btn:hover { background: #34344a; }
+    .layer-btn.active { background: #5a7dd4; border-color: #7a9de4; color: #fff; }
+    #hover-info {
+      margin-left: auto; color: #bbb; font-size: 12px;
+      font-family: ui-monospace, Consolas, monospace;
+      padding-right: 10px; white-space: nowrap;
+    }
+
+    /* --- Palette + canvas --- */
+    #palette {
+      position: absolute; top: 76px; left: 0; bottom: 0; width: 140px;
+      background: #1d1d28; border-right: 1px solid #3a3a48;
+      overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 6px;
+    }
+    #palette h3 {
+      font-size: 11px; text-transform: uppercase; color: #888;
+      margin-bottom: 4px; letter-spacing: 0.5px;
+    }
+    .tile-entry {
+      background: #2a2a38; border: 2px solid transparent; border-radius: 4px;
+      padding: 6px; cursor: pointer; display: flex; flex-direction: column;
+      align-items: center; gap: 4px; user-select: none;
+    }
+    .tile-entry:hover { background: #34344a; }
+    .tile-entry.active { border-color: #5a7dd4; background: #2d3550; }
+    .tile-entry img { width: 48px; height: 48px; image-rendering: pixelated; background: #111; }
+    .tile-entry .name { font-size: 11px; color: #ccc; }
+
+    .palette-group { border: 0; }
+    .palette-group > summary {
+      list-style: none; cursor: pointer; user-select: none;
+      font-size: 11px; text-transform: uppercase; color: #888;
+      letter-spacing: 0.5px; padding: 4px 2px;
+      display: flex; align-items: center; gap: 4px;
+    }
+    .palette-group > summary::-webkit-details-marker { display: none; }
+    .palette-group > summary::before {
+      content: '\25B6'; font-size: 9px; color: #666;
+      transition: transform 120ms ease;
+    }
+    .palette-group[open] > summary::before { transform: rotate(90deg); }
+    .palette-group > summary:hover { color: #bbb; }
+    .palette-group-items {
+      display: flex; flex-direction: column; gap: 6px; padding-top: 4px;
+    }
+
+    #canvas-wrap {
+      position: absolute; top: 76px; left: 140px; right: 0; bottom: 0;
+      overflow: auto; background: #0f0f18;
+      display: flex; align-items: center;
+    }
+    #editor-canvas { display: block; image-rendering: pixelated; cursor: crosshair; }
+
+    input[type=file] { display: none; }
+
+    #hint {
+      position: fixed; bottom: 8px; right: 12px;
+      background: rgba(0,0,0,0.6); padding: 6px 10px; border-radius: 4px;
+      font-size: 11px; color: #aaa; pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="menubar">
+    <div class="menu" data-menu="file">
+      <button class="menu-label">File</button>
+      <ul class="menu-items">
+        <li><button id="btn-save">Save</button></li>
+        <li><button id="btn-export">Export JSON</button></li>
+        <li><label for="import-file">Import JSON</label></li>
+        <li class="divider"></li>
+        <li><button id="btn-world-size">World size&hellip;</button></li>
+        <li class="divider"></li>
+        <li><button id="btn-clear">Clear All</button></li>
+      </ul>
+    </div>
+    <div class="menu" data-menu="view">
+      <button class="menu-label">View</button>
+      <ul class="menu-items">
+        <li data-sticky><label class="check-item"><input type="checkbox" id="layer-sky" checked> Sky</label></li>
+        <li data-sticky><label class="check-item"><input type="checkbox" id="layer-clouds" checked> Clouds</label></li>
+        <li data-sticky><label class="check-item"><input type="checkbox" id="layer-trees" checked> Trees</label></li>
+      </ul>
+    </div>
+    <input type="file" id="import-file" accept=".json,application/json" />
+    <div id="status">Tiles: 0</div>
+  </div>
+
+  <div id="toolbar">
+    <button id="tool-paint" class="icon-btn active" title="Paint (LMB)">
+      <!-- brush icon -->
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 14c-1.66 0-3 1.34-3 3 0 1.31-1.16 2-2 2 .92 1.22 2.49 2 4 2 2.21 0 4-1.79 4-4 0-1.66-1.34-3-3-3zm13.71-9.37l-1.34-1.34a1 1 0 0 0-1.41 0L9 12.25 11.75 15l8.96-8.96a1 1 0 0 0 0-1.41z"/></svg>
+    </button>
+    <button id="tool-erase" class="icon-btn" title="Erase (RMB)">
+      <!-- eraser icon -->
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16.24 3.56l4.2 4.2a2 2 0 0 1 0 2.83L12.7 18.34a2 2 0 0 1-2.83 0L5.66 14.12a2 2 0 0 1 0-2.83l7.76-7.73a2 2 0 0 1 2.82 0zM9.17 19.5L4.5 14.83 3.09 16.24a1 1 0 0 0 0 1.42l2.83 2.83a1 1 0 0 0 1.41 0L9.17 19.5z"/></svg>
+    </button>
+    <button id="tool-pan" class="icon-btn" title="Pan (drag to move the map)">
+      <!-- hand / pan icon -->
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 24c-3.89 0-6.95-1.74-9.08-5.19l-.53-.85c-.49-.8-.24-1.85.56-2.35a1.72 1.72 0 0 1 2.37.56l.27.44c.55.9 1.15 1.6 1.91 2.11v-11.7a1.6 1.6 0 0 1 3.2 0V12a.5.5 0 0 0 1 0V4.3a1.6 1.6 0 0 1 3.2 0V12a.5.5 0 0 0 1 0V6.3a1.6 1.6 0 0 1 3.2 0V12a.5.5 0 0 0 1 0V9.3a1.6 1.6 0 0 1 3.2 0v7.54C24 20.77 20.77 24 16.84 24H13z"/></svg>
+    </button>
+    <div class="sep"></div>
+    <button id="layer-solid" class="layer-btn active" title="Solid tiles (collidable)">Solid</button>
+    <button id="layer-deco-back" class="layer-btn" title="Decorations behind the player">Back</button>
+    <button id="layer-deco-front" class="layer-btn" title="Decorations in front of the player">Front</button>
+    <div class="sep"></div>
+    <button id="btn-play" class="icon-btn" title="Play">
+      <!-- play triangle -->
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+    </button>
+    <div id="hover-info">—</div>
+  </div>
+
+  <aside id="palette">
+    <h3>Tiles</h3>
+  </aside>
+  <div id="canvas-wrap">
+    <canvas id="editor-canvas"></canvas>
+  </div>
+  <div id="hint">LMB paint · RMB erase · drag to sweep · scroll to pan · Ctrl+scroll to zoom</div>
+  <script type="module" src="/src/editor.ts"></script>
+</body>
+</html>

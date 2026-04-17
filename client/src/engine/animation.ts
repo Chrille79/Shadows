@@ -20,18 +20,20 @@ export interface Animation {
   atlasHeight: number;
   frameCount: number;
   fps: number;
+  loop: boolean;
 }
 
 export interface AnimationPlayer {
   currentAnim: string;
   frameIndex: number;
   timer: number;
+  finished: boolean;
   play(name: string): void;
   update(dt: number): void;
   getUV(): { uvX: number; uvY: number; uvW: number; uvH: number };
 }
 
-export function createAnimation(name: string, atlas: AtlasData, fps: number = 12): Animation {
+export function createAnimation(name: string, atlas: AtlasData, fps: number = 12, loop: boolean = true): Animation {
   const frameKeys = Object.keys(atlas.frames).sort((a, b) => parseInt(a) - parseInt(b));
   const frames = frameKeys.map((k) => atlas.frames[k]);
 
@@ -42,6 +44,7 @@ export function createAnimation(name: string, atlas: AtlasData, fps: number = 12
     atlasHeight: atlas.meta.size.h,
     frameCount: frames.length,
     fps,
+    loop,
   };
 }
 
@@ -52,24 +55,35 @@ export function createAnimationPlayer(animations: Record<string, Animation>): An
     currentAnim: firstKey,
     frameIndex: 0,
     timer: 0,
+    finished: false,
 
     play(name: string) {
       if (player.currentAnim === name) return;
       player.currentAnim = name;
       player.frameIndex = 0;
       player.timer = 0;
+      player.finished = false;
     },
 
     update(dt: number) {
       const anim = animations[player.currentAnim];
-      if (!anim) return;
+      if (!anim || player.finished) return;
 
       player.timer += dt;
       const frameDuration = 1 / anim.fps;
 
       while (player.timer >= frameDuration) {
         player.timer -= frameDuration;
-        player.frameIndex = (player.frameIndex + 1) % anim.frameCount;
+        if (anim.loop) {
+          player.frameIndex = (player.frameIndex + 1) % anim.frameCount;
+        } else {
+          player.frameIndex++;
+          if (player.frameIndex >= anim.frameCount) {
+            player.frameIndex = anim.frameCount - 1;
+            player.finished = true;
+            break;
+          }
+        }
       }
     },
 

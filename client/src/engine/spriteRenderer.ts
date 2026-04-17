@@ -153,9 +153,19 @@ export function createSpriteRenderer(renderer: Renderer): SpriteRenderer {
 
   let spriteCount = 0;
   let bufferOffset = 0; // running offset into instance buffer per frame
+  let overflowWarnedThisFrame = false;
 
   function drawSprite(sprite: SpriteInstance) {
-    if (bufferOffset + spriteCount >= MAX_SPRITES) return;
+    if (bufferOffset + spriteCount >= MAX_SPRITES) {
+      if (!overflowWarnedThisFrame) {
+        console.warn(
+          `[spriteRenderer] MAX_SPRITES (${MAX_SPRITES}) exceeded this frame — dropping sprites. ` +
+          `Raise MAX_SPRITES or split rendering.`,
+        );
+        overflowWarnedThisFrame = true;
+      }
+      return;
+    }
 
     const i = (bufferOffset + spriteCount) * INSTANCE_FLOATS;
     instanceData[i + 0] = sprite.x;
@@ -202,6 +212,7 @@ export function createSpriteRenderer(renderer: Renderer): SpriteRenderer {
   function beginFrame() {
     bufferOffset = 0;
     spriteCount = 0;
+    overflowWarnedThisFrame = false;
   }
 
   return { beginFrame, drawSprite, flush, flushWithTexture, whiteTexture, createTextureBindGroup };

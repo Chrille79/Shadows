@@ -1,3 +1,10 @@
+export const GAME_W = 1920;
+export const GAME_H = 1080;
+// World is a grid of 132×132 tiles. 58×44 = 7656×5808, rounded to even tile counts.
+export const TILE_SIZE = 132;
+export const WORLD_W = TILE_SIZE * 58; // 7656 — wide world, horizontal scrolling
+export const WORLD_H = TILE_SIZE * 44; // 5808 — 44 tiles tall
+
 export interface Renderer {
   device: GPUDevice;
   context: GPUCanvasContext;
@@ -6,7 +13,8 @@ export interface Renderer {
   projectionBuffer: GPUBuffer;
   beginFrame(): GPURenderPassEncoder;
   endFrame(): void;
-  updateProjection(width: number, height: number): void;
+  updateProjection(camX: number, camY: number): void;
+  dispose(): void;
 }
 
 export async function initRenderer(canvas: HTMLCanvasElement): Promise<Renderer> {
@@ -20,10 +28,31 @@ export async function initRenderer(canvas: HTMLCanvasElement): Promise<Renderer>
   }
 
   const device = await adapter.requestDevice();
-  const context = canvas.getContext('webgpu')!;
+  const context = canvas.getContext('webgpu');
+  if (!context) {
+    throw new Error('Failed to get WebGPU canvas context.');
+  }
   const format = navigator.gpu.getPreferredCanvasFormat();
 
+  // Fixed game resolution
+  canvas.width = GAME_W;
+  canvas.height = GAME_H;
+
   context.configure({ device, format, alphaMode: 'opaque' });
+
+  // Scale canvas display to fit window while maintaining aspect ratio
+  function fitCanvas() {
+    const scale = Math.min(window.innerWidth / GAME_W, window.innerHeight / GAME_H);
+    canvas.style.width = `${GAME_W * scale}px`;
+    canvas.style.height = `${GAME_H * scale}px`;
+    canvas.style.margin = 'auto';
+    canvas.style.position = 'absolute';
+    canvas.style.top = '50%';
+    canvas.style.left = '50%';
+    canvas.style.transform = 'translate(-50%, -50%)';
+  }
+  fitCanvas();
+  window.addEventListener('resize', fitCanvas);
 
   // Orthographic projection uniform buffer (mat4x4f = 64 bytes)
   const projectionBuffer = device.createBuffer({
@@ -34,14 +63,14 @@ export async function initRenderer(canvas: HTMLCanvasElement): Promise<Renderer>
   let commandEncoder: GPUCommandEncoder;
   let passEncoder: GPURenderPassEncoder;
 
-  function updateProjection(width: number, height: number) {
-    // Orthographic projection: maps (0,0)-(width,height) to clip space
-    // Y-down: top=0, bottom=height
+  function updateProjection(camX: number, camY: number) {
+    // Orthographic projection with camera offset
+    // Maps (camX, camY)-(camX+GAME_W, camY+GAME_H) to clip space, Y-down
     const proj = new Float32Array([
-      2 / width, 0, 0, 0,
-      0, -2 / height, 0, 0,
+      2 / GAME_W, 0, 0, 0,
+      0, -2 / GAME_H, 0, 0,
       0, 0, 1, 0,
-      -1, 1, 0, 1,
+      -2 * camX / GAME_W - 1, 2 * camY / GAME_H + 1, 0, 1,
     ]);
     device.queue.writeBuffer(projectionBuffer, 0, proj);
   }
@@ -68,23 +97,16 @@ export async function initRenderer(canvas: HTMLCanvasElement): Promise<Renderer>
   }
 
   // Set initial projection
-  handleResize();
+  updateProjection(0, 0);
 
-  function handleResize() {
-    const rect = canvas.getBoundingClientRect();
-    const w = Math.max(rect.width, 1920) | 0;
-    const h = Math.max(rect.height, 1080) | 0;
-    if (canvas.width !== w || canvas.height !== h) {
-      canvas.width = w;
-      canvas.height = h;
-      updateProjection(w, h);
-    }
+  let disposed = false;
+  function dispose() {
+    if (disposed) return;
+    disposed = true;
+    window.removeEventListener('resize', fitCanvas);
+    projectionBuffer.destroy();
+    // Note: GPUDevice is not explicitly destroyed — handled by GC when nothing references it.
   }
-
-  window.addEventListener('resize', handleResize);
-  // Also observe layout changes
-  const ro = new ResizeObserver(handleResize);
-  ro.observe(canvas);
 
   return {
     device,
@@ -95,5 +117,6 @@ export async function initRenderer(canvas: HTMLCanvasElement): Promise<Renderer>
     beginFrame,
     endFrame,
     updateProjection,
+    dispose,
   };
 }

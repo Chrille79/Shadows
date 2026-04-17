@@ -19,3 +19,6 @@ Shadows.Server/wwwroot/
 # OS
 Thumbs.db
 .DS_Store
+
+# Secrets / local MCP config (contains auth tokens)
+not_online.mcp.json
