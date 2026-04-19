@@ -3,10 +3,10 @@
 
 import { WORLD_W, WORLD_H, TILE_SIZE } from './engine/renderer';
 import { createWorldRenderer, type WorldRenderer } from './engine/worldRenderer';
-import { stageFromFile, type Stage } from './game/stage';
+import type { SpriteRenderer } from './engine/spriteRenderer';
+import { stageFromFile, loadStageTextures, type Stage } from './game/stage';
 import { TILE_TYPES, DECORATION_TYPES, ALL_TYPES, DEFAULT_TILE_ID, getTileType } from './game/tileTypes';
 import { config } from './config';
-import grassOverlayUrl from './assets/overlays/grass_overlay_mid.png?url';
 import level001 from './levels/level_001.json';
 import './dev/settings'; // window.settings helpers — dev only.
 import './dev/panel';    // In-page dev panel (backtick to toggle) — dev only.
@@ -82,34 +82,57 @@ type ActiveLayer = 'solid' | 'back' | 'front';
 let activeLayer: ActiveLayer = 'solid';
 
 const canvas = document.getElementById('editor-canvas') as HTMLCanvasElement;
-const bgCanvas = document.getElementById('editor-bg-canvas') as HTMLCanvasElement;
-const stackEl = document.getElementById('canvas-stack') as HTMLDivElement;
-const ctx = canvas.getContext('2d');
-if (!ctx) {
-  throw new Error('Failed to get 2d canvas context for editor.');
-}
 canvas.width = worldW;
 canvas.height = worldH;
 
-// WebGPU world renderer for the background layers (sky gradient, hill
-// ribbons, drifting clouds).  Rendered behind the 2D editor canvas —
-// same shader path as the in-game renderer, so new bg features never
-// drift between game and editor.  Tiles/grid/hover stay in the 2D layer
-// above.  Init is async; until it resolves the bg canvas stays blank
-// and draw() just paints the 2D chrome.
+// Single WebGPU world renderer on the editor canvas.  Draws sky gradient,
+// hill ribbons, clouds, tiles, grass and decorations via the same shared
+// pipeline the in-game renderer uses — so nothing ever drifts between the
+// two views.  Editor-only chrome (grid, horizon line, hover cursor) is
+// drawn as sprite-batch quads in an overlay callback on top of the same
+// pass; no 2D canvas fallback remains.
 let bgWorld: WorldRenderer | null = null;
-bgCanvas.width = worldW;
-bgCanvas.height = worldH;
+// Preloaded bind-groups for every tile + decoration type, plus the shared
+// corner-filler and grass overlays.  Built once at init by calling
+// loadStageTextures on a synthetic stage that references every known type,
+// then reused by buildEditorStage() so each draw() doesn't re-upload textures.
+let preloadedTypes: Stage['typeResources'] | null = null;
+let preloadedOverlays: Stage['overlays'] | null = null;
+// Bind-group for the 1×1 white fallback texture — tinted via sprite r/g/b/a,
+// this lets the overlay callback draw solid-color rectangles (grid lines,
+// horizon dashes, hover outline) through the sprite batcher.
+let whiteBindGroup: GPUBindGroup | null = null;
 
 async function initBgWorld() {
   try {
     bgWorld = await createWorldRenderer({
-      canvas: bgCanvas,
+      canvas,
       viewportW: worldW,
       viewportH: worldH,
       fitWindow: false,
     });
-    draw(); // first frame with bg now that WebGPU is ready
+    whiteBindGroup = bgWorld.sprites.createTextureBindGroup(bgWorld.sprites.whiteTexture);
+    // Preload every tile + decoration texture by loading a synthetic stage
+    // that references all of them.  We then reuse the populated maps for
+    // every buildEditorStage() call.
+    const allStage: Stage = {
+      worldWidth: worldW,
+      worldHeight: worldH,
+      groundY,
+      platforms: ALL_TYPES.filter((t) => t.solid).map((t, i) => ({
+        x: 0, y: i * TILE, width: TILE, height: TILE, type: t.id, grass: true,
+      })),
+      decorationsBack: ALL_TYPES.filter((t) => !t.solid).map((t, i) => ({
+        x: 0, y: i * HALF, type: t.id,
+      })),
+      decorationsFront: [],
+      typeResources: new Map(),
+      overlays: {},
+    };
+    await loadStageTextures(allStage, bgWorld.renderer.device, bgWorld.sprites);
+    preloadedTypes = allStage.typeResources;
+    preloadedOverlays = allStage.overlays;
+    draw(); // first frame now that WebGPU + textures are ready
   } catch (err) {
     console.warn('[editor] WebGPU bg init failed; bg will be blank:', err);
   }
@@ -117,20 +140,15 @@ async function initBgWorld() {
 void initBgWorld();
 
 function buildEditorStage(): Stage {
-  // Editor's bg pass only needs a stage shell with groundY set so hills
-  // anchor correctly.  Tiles and decorations stay in the 2D layer for now
-  // — we render a stage with empty platform/decoration arrays so the
-  // shared renderer's stage/decoration passes do nothing here.
-  return {
-    worldWidth: worldW,
-    worldHeight: worldH,
-    groundY,
-    platforms: [],
-    decorationsBack: [],
-    decorationsFront: [],
-    typeResources: new Map(),
-    overlays: {},
-  };
+  // Serialize the authored grid[] arrays to a LevelFile, then rebuild a Stage
+  // via the same parser the game uses.  Reuse the preloaded textures so
+  // renderStage + renderDecorations draw actual tiles/grass/decorations
+  // without uploading anything new each frame.
+  const data = serializeLevel();
+  const stage = stageFromFile(data);
+  if (preloadedTypes) stage.typeResources = preloadedTypes;
+  if (preloadedOverlays) stage.overlays = preloadedOverlays;
+  return stage;
 }
 
 // Display scale is adjustable with Ctrl+Scroll.
@@ -138,14 +156,8 @@ const MIN_SCALE = 0.1;
 const MAX_SCALE = 3.0;
 let displayScale = 0.5;
 function applyDisplayScale() {
-  const w = `${worldW * displayScale}px`;
-  const h = `${worldH * displayScale}px`;
-  canvas.style.width = w;
-  canvas.style.height = h;
-  bgCanvas.style.width = w;
-  bgCanvas.style.height = h;
-  stackEl.style.width = w;
-  stackEl.style.height = h;
+  canvas.style.width = `${worldW * displayScale}px`;
+  canvas.style.height = `${worldH * displayScale}px`;
 }
 applyDisplayScale();
 
@@ -185,9 +197,6 @@ const tileImages: HTMLImageElement[] = ALL_TYPES.map((t) => {
 
 // Grass overlay texture — matches the in-game grass render so the editor
 // preview looks the same as what the player sees.
-const grassOverlayImg = new Image();
-grassOverlayImg.src = grassOverlayUrl;
-grassOverlayImg.onload = () => draw();
 
 // View toggles — user can hide any preview layer to focus on tile editing.
 let showSky = true;
@@ -369,19 +378,107 @@ function activeDecoGrid(): Uint8Array | null {
 function anchorXFor(gx: number) { return (gx + 0.5) * HALF; }
 function anchorYFor(gy: number) { return (gy + 1) * HALF; }
 
-function drawBackground() {
-  // Background layers (sky gradient, procedural hills, drifting clouds) are
-  // rendered by the shared WebGPU world renderer on #editor-bg-canvas.  We
-  // just ask it for one frame — same passes the in-game renderer runs, so
-  // the editor automatically reflects any bg tweaks without a separate
-  // implementation to keep in sync.
-  //
-  // The view checkboxes (showSky/showHills/showClouds) temporarily override
-  // config.layers during this one renderFrame call, then we restore — avoids
-  // leaking editor-local state into the running game if both are open.
+/**
+ * Editor chrome (grid, horizon, hover) painted as sprite-batch quads on top
+ * of the world render.  All solid-color rects go through the 1×1 white
+ * texture, tinted via per-sprite r/g/b/a; flushed per-logical-layer so each
+ * pass submits as one draw call.
+ */
+function editorOverlays(pass: GPURenderPassEncoder, sprites: SpriteRenderer): void {
+  if (!whiteBindGroup) return;
+
+  // Grid lines — 1px quads along each cell edge.
+  if (showGrid) {
+    const rLine = 0.14, gLine = 0.14, bLine = 0.19, aLine = 0.33;
+    for (let c = 0; c <= COLS; c++) {
+      sprites.drawSprite({
+        x: c * TILE, y: 0, width: 1, height: ROWS * TILE,
+        r: rLine, g: gLine, b: bLine, a: aLine,
+      });
+    }
+    for (let r = 0; r <= ROWS; r++) {
+      sprites.drawSprite({
+        x: 0, y: r * TILE, width: COLS * TILE, height: 1,
+        r: rLine, g: gLine, b: bLine, a: aLine,
+      });
+    }
+    sprites.flushWithTexture(pass, whiteBindGroup);
+  }
+
+  // Horizon dashed line — short orange segments every (dash+gap) world-px.
+  {
+    const dashLen = 14, gapLen = 10;
+    const hr = 0.91, hg = 0.65, hb = 0.20, ha = 1.0;
+    for (let x = 0; x < worldW; x += dashLen + gapLen) {
+      sprites.drawSprite({
+        x, y: groundY - 1, width: dashLen, height: 3,
+        r: hr, g: hg, b: hb, a: ha,
+      });
+    }
+    sprites.flushWithTexture(pass, whiteBindGroup);
+  }
+
+  // Hover cursor — tile-sized outline (4 thin quads) plus an optional
+  // translucent tile-preview via the preloaded type textures when painting.
+  if (activeLayer === 'solid') {
+    if (hoverCx >= 0 && hoverCy >= 0 && hoverCx < COLS && hoverCy < ROWS) {
+      const px = hoverCx * TILE, py = hoverCy * TILE;
+      // Outline
+      const er = tool === 'erase' ? 1.0 : 1.0;
+      const eg = tool === 'erase' ? 0.39 : 0.86;
+      const eb = tool === 'erase' ? 0.39 : 0.39;
+      const th = 3;
+      sprites.drawSprite({ x: px, y: py, width: TILE, height: th, r: er, g: eg, b: eb, a: 1 });
+      sprites.drawSprite({ x: px, y: py + TILE - th, width: TILE, height: th, r: er, g: eg, b: eb, a: 1 });
+      sprites.drawSprite({ x: px, y: py, width: th, height: TILE, r: er, g: eg, b: eb, a: 1 });
+      sprites.drawSprite({ x: px + TILE - th, y: py, width: th, height: TILE, r: er, g: eg, b: eb, a: 1 });
+      sprites.flushWithTexture(pass, whiteBindGroup);
+
+      // Translucent tile preview — reuse the preloaded tile bind-group.
+      if (tool === 'paint' && preloadedTypes) {
+        const selType = ALL_TYPES[selectedTypeIndex];
+        const res = selType ? preloadedTypes.get(selType.id) : undefined;
+        if (res) {
+          sprites.drawSprite({ x: px, y: py, width: TILE, height: TILE, a: 0.45 });
+          sprites.flushWithTexture(pass, res.bindGroup);
+        }
+      }
+    }
+  } else {
+    if (hoverGx >= 0 && hoverGy >= 0 && hoverGx < DECO_COLS && hoverGy < DECO_ROWS) {
+      const ax = anchorXFor(hoverGx);
+      const ay = anchorYFor(hoverGy);
+      const hx = hoverGx * HALF, hy = hoverGy * HALF;
+      const er = tool === 'erase' ? 1.0 : 1.0;
+      const eg = tool === 'erase' ? 0.39 : 0.86;
+      const eb = tool === 'erase' ? 0.39 : 0.39;
+      const th = 2;
+      sprites.drawSprite({ x: hx, y: hy, width: HALF, height: th, r: er, g: eg, b: eb, a: 1 });
+      sprites.drawSprite({ x: hx, y: hy + HALF - th, width: HALF, height: th, r: er, g: eg, b: eb, a: 1 });
+      sprites.drawSprite({ x: hx, y: hy, width: th, height: HALF, r: er, g: eg, b: eb, a: 1 });
+      sprites.drawSprite({ x: hx + HALF - th, y: hy, width: th, height: HALF, r: er, g: eg, b: eb, a: 1 });
+      // Small anchor square at the sprite-bottom anchor point.
+      sprites.drawSprite({ x: ax - 4, y: ay - 4, width: 8, height: 8, r: er, g: eg, b: eb, a: 1 });
+      sprites.flushWithTexture(pass, whiteBindGroup);
+
+      // Translucent deco preview.
+      if (tool === 'paint' && preloadedTypes) {
+        const selType = ALL_TYPES[selectedTypeIndex];
+        const res = selType ? preloadedTypes.get(selType.id) : undefined;
+        if (res) {
+          const h = selType?.solid ? TILE : res.srcH;
+          const w = selType?.solid ? TILE * (res.srcW / res.srcH) : res.srcW;
+          sprites.drawSprite({ x: ax - w / 2, y: ay - h, width: w, height: h, a: 0.45 });
+          sprites.flushWithTexture(pass, res.bindGroup);
+        }
+      }
+    }
+  }
+}
+
+function draw() {
   if (!bgWorld) return;
   const stage = buildEditorStage();
-
   const saved = { ...config.layers };
   config.layers.sky = showSky;
   config.layers.hillsFar = showHills;
@@ -393,160 +490,13 @@ function drawBackground() {
       camX: 0,
       camY: 0,
       nowMs: performance.now(),
+      overlays: editorOverlays,
     });
   } finally {
     config.layers.sky = saved.sky;
     config.layers.hillsFar = saved.hillsFar;
     config.layers.hillsNear = saved.hillsNear;
     config.layers.clouds = saved.clouds;
-  }
-}
-
-function draw() {
-  drawBackground();
-
-  // 2D canvas paints tiles, grid, horizon line, and hover chrome over the
-  // WebGPU bg.  Clear to transparent so the bg canvas below shows through.
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-  // Grid lines
-  if (showGrid) {
-    ctx.strokeStyle = '#24243055';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let c = 0; c <= COLS; c++) {
-      const x = c * TILE + 0.5;
-      ctx.moveTo(x, 0); ctx.lineTo(x, ROWS * TILE);
-    }
-    for (let r = 0; r <= ROWS; r++) {
-      const y = r * TILE + 0.5;
-      ctx.moveTo(0, y); ctx.lineTo(COLS * TILE, y);
-    }
-    ctx.stroke();
-  }
-
-  // Horizon line — where parallax bg images anchor in the running game.
-  // Above this y the game shows pure sky gradient; below, hills/bg layers.
-  ctx.strokeStyle = '#e8a533';
-  ctx.lineWidth = 3;
-  ctx.setLineDash([14, 10]);
-  ctx.beginPath();
-  ctx.moveTo(0, groundY + 0.5); ctx.lineTo(canvas.width, groundY + 0.5);
-  ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.fillStyle = '#e8a533';
-  ctx.font = 'bold 18px ui-monospace, Consolas, monospace';
-  ctx.fillText('horizon (ground Y)', 12, groundY - 8);
-
-  // Decorations back — drawn before solid so tiles can occlude deco that
-  // extends into the ground row (matches game render order).
-  drawDecoLayer(gridBack);
-
-  // Tiles
-  for (let cy = 0; cy < ROWS; cy++) {
-    for (let cx = 0; cx < COLS; cx++) {
-      const v = grid[cellIndex(cx, cy)];
-      if (!v) continue;
-      const idx = v - 1;
-      const img = tileImages[idx];
-      const px = cx * TILE, py = cy * TILE;
-      if (img && img.complete && img.naturalWidth > 0) {
-        const r = srcRectFor(idx);
-        ctx.drawImage(img, r.x, r.y, r.w, r.h, px, py, TILE, TILE);
-      } else {
-        ctx.fillStyle = '#6a5a8a';
-        ctx.fillRect(px, py, TILE, TILE);
-      }
-      ctx.strokeStyle = '#00000033';
-      ctx.strokeRect(px + 0.5, py + 0.5, TILE - 1, TILE - 1);
-    }
-  }
-
-  // Grass overlays — rendered with the real grass PNG so the editor preview
-  // matches the in-game render. Contiguous grass-flagged cells on the same
-  // row are tiled under a single run for a seamless strip (same as the
-  // runtime grass pass in stage.ts).
-  if (grassOverlayImg.complete && grassOverlayImg.naturalWidth > 0) {
-    const gImg = grassOverlayImg;
-    const copyW = config.grass.displayH * (gImg.naturalWidth / gImg.naturalHeight);
-    for (let cy = 0; cy < ROWS; cy++) {
-      const rowPhase = ((cy * 317) % copyW + copyW) % copyW;
-      let cx = 0;
-      while (cx < COLS) {
-        if (!grassGrid[cellIndex(cx, cy)]) { cx++; continue; }
-        let end = cx + 1;
-        while (end < COLS && grassGrid[cellIndex(end, cy)]) end++;
-        const runX = cx * TILE - config.grass.overhang;
-        const runEnd = end * TILE + config.grass.overhang;
-        const topY = cy * TILE - config.grass.topRise;
-        let gx = runX - rowPhase;
-        while (gx < runEnd) {
-          const left = Math.max(gx, runX);
-          const right = Math.min(gx + copyW, runEnd);
-          if (right > left) {
-            const drawW = right - left;
-            const srcX = ((left - gx) / copyW) * gImg.naturalWidth;
-            const srcW = (drawW / copyW) * gImg.naturalWidth;
-            ctx.drawImage(gImg,
-              srcX, 0, srcW, gImg.naturalHeight,
-              left, topY, drawW, config.grass.displayH);
-          }
-          gx += copyW;
-        }
-        cx = end;
-      }
-    }
-  }
-
-  // Decorations front (drawn after solid; player renders behind in-game).
-  drawDecoLayer(gridFront);
-
-  // Hover preview
-  if (activeLayer === 'solid') {
-    if (hoverCx >= 0 && hoverCy >= 0 && hoverCx < COLS && hoverCy < ROWS) {
-      const px = hoverCx * TILE, py = hoverCy * TILE;
-      if (tool === 'paint') {
-        const img = tileImages[selectedTypeIndex];
-        ctx.globalAlpha = 0.45;
-        if (img && img.complete && img.naturalWidth > 0) {
-          const r = srcRectFor(selectedTypeIndex);
-          ctx.drawImage(img, r.x, r.y, r.w, r.h, px, py, TILE, TILE);
-        } else {
-          ctx.fillStyle = '#8ac';
-          ctx.fillRect(px, py, TILE, TILE);
-        }
-        ctx.globalAlpha = 1;
-      }
-      ctx.lineWidth = 3;
-      ctx.strokeStyle = tool === 'erase' ? '#ff6464' : '#ffdc64';
-      ctx.strokeRect(px + 1.5, py + 1.5, TILE - 3, TILE - 3);
-    }
-  } else {
-    if (hoverGx >= 0 && hoverGy >= 0 && hoverGx < DECO_COLS && hoverGy < DECO_ROWS) {
-      const ax = anchorXFor(hoverGx);
-      const ay = anchorYFor(hoverGy);
-      if (tool === 'paint') {
-        const img = tileImages[selectedTypeIndex];
-        if (img && img.complete && img.naturalWidth > 0) {
-          const r = srcRectFor(selectedTypeIndex);
-          const selType = ALL_TYPES[selectedTypeIndex];
-          const h = selType?.solid ? TILE : r.h;
-          const w = selType?.solid ? TILE * (r.w / r.h) : r.w;
-          ctx.globalAlpha = 0.45;
-          ctx.drawImage(img, r.x, r.y, r.w, r.h, ax - w / 2, ay - h, w, h);
-          ctx.globalAlpha = 1;
-        }
-      }
-      // Half-cell rectangle highlight.
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = tool === 'erase' ? '#ff6464' : '#ffdc64';
-      ctx.strokeRect(hoverGx * HALF + 1, hoverGy * HALF + 1, HALF - 2, HALF - 2);
-      // Anchor point dot.
-      ctx.fillStyle = tool === 'erase' ? '#ff6464' : '#ffdc64';
-      ctx.beginPath();
-      ctx.arc(ax, ay, 4, 0, Math.PI * 2);
-      ctx.fill();
-    }
   }
 
   const curType = ALL_TYPES[selectedTypeIndex]?.name ?? '—';
@@ -562,31 +512,6 @@ function draw() {
   statusEl.style.color =
     spriteN >= budget ? '#ff6464' :
     spriteN >= 0.8 * budget ? '#ffdc64' : '';
-}
-
-function drawDecoLayer(layer: Uint8Array) {
-  for (let gy = 0; gy < DECO_ROWS; gy++) {
-    for (let gx = 0; gx < DECO_COLS; gx++) {
-      const v = layer[decoIndex(gx, gy)];
-      if (!v) continue;
-      const idx = v - 1;
-      const t = ALL_TYPES[idx];
-      const img = tileImages[idx];
-      const ax = anchorXFor(gx);
-      const ay = anchorYFor(gy);
-      if (img && img.complete && img.naturalWidth > 0) {
-        const r = srcRectFor(idx);
-        // Mirror the game: solid tile types placed as deco render at one tile
-        // high with source aspect; true sprites render at their native size.
-        const h = t?.solid ? TILE : r.h;
-        const w = t?.solid ? TILE * (r.w / r.h) : r.w;
-        ctx.drawImage(img, r.x, r.y, r.w, r.h, ax - w / 2, ay - h, w, h);
-      } else {
-        ctx.fillStyle = '#8a6a5a';
-        ctx.fillRect(ax - HALF / 2, ay - HALF, HALF, HALF);
-      }
-    }
-  }
 }
 
 function countDeco(layer: Uint8Array): number {
@@ -654,13 +579,12 @@ function resizeWorld(newCols: number, newRows: number) {
 
   canvas.width = worldW;
   canvas.height = worldH;
-  bgCanvas.width = worldW;
-  bgCanvas.height = worldH;
   // WebGPU viewport is bound at init time; re-create so shaders see the
   // new world dims.  Rare event (user changes world size), re-init is cheap.
   if (bgWorld) {
     bgWorld.dispose();
     bgWorld = null;
+    whiteBindGroup = null;
     void initBgWorld();
   }
 

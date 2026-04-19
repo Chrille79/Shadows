@@ -104,7 +104,7 @@ export async function initRenderer(
 
   function beginFrame(): GPURenderPassEncoder {
     commandEncoder = device.createCommandEncoder();
-    const textureView = context.getCurrentTexture().createView();
+    const textureView = context!.getCurrentTexture().createView();
 
     passEncoder = commandEncoder.beginRenderPass({
       colorAttachments: [{

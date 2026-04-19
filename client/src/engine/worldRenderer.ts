@@ -36,6 +36,10 @@ export interface WorldFrame {
   camY: number;
   /** `performance.now()` — used for cloud drift, future animations. */
   nowMs: number;
+  /** Optional overlay pass — called after all world draws but before the
+   *  render pass ends.  The editor uses it to paint grid, horizon line and
+   *  hover chrome on top without needing a second canvas. */
+  overlays?: (pass: GPURenderPassEncoder, sprites: SpriteRenderer) => void;
 }
 
 export interface WorldRenderer {
@@ -93,6 +97,8 @@ export async function createWorldRenderer(
     renderStage(f.stage, sprites, pass);
     if (f.player) renderCharacter(f.player, sprites, pass);
     renderDecorations(f.stage, f.stage.decorationsFront, sprites, pass);
+
+    f.overlays?.(pass, sprites);
 
     renderer.endFrame();
   }

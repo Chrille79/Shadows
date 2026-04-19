@@ -121,10 +121,7 @@
       overflow: auto; background: #0f0f18;
       display: flex; align-items: center;
     }
-    .canvas-stack { position: relative; flex: none; }
-    .canvas-stack canvas { position: absolute; top: 0; left: 0; display: block; image-rendering: pixelated; }
-    #editor-bg-canvas { z-index: 0; pointer-events: none; }
-    #editor-canvas { z-index: 1; position: relative; cursor: crosshair; }
+    #editor-canvas { display: block; image-rendering: pixelated; cursor: crosshair; }
 
     input[type=file] { display: none; }
 
@@ -241,10 +238,7 @@
     <h3>Tiles</h3>
   </aside>
   <div id="canvas-wrap">
-    <div class="canvas-stack" id="canvas-stack">
-      <canvas id="editor-bg-canvas"></canvas>
-      <canvas id="editor-canvas"></canvas>
-    </div>
+    <canvas id="editor-canvas"></canvas>
   </div>
   <dialog id="prompt-dialog" class="shadows-dialog">
     <form method="dialog">
