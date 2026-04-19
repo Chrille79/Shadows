@@ -28,7 +28,10 @@ CAMERA_ANGLE_Z = 0
 CAMERA_DISTANCE = 4
 ORTHO_SCALE = 2.0   # tight fit — cube fills canvas edge-to-edge for tiling
 
-BEVEL_WIDTH = 0.12        # size of rounded edge (0-1 scale on 2x2x2 cube)
+BEVEL_WIDTH = 0.1875      # size of rounded edge (0-1 scale on 2x2x2 cube)
+                          # 0.1875 ≈ 48 px radius in a 512-native render,
+                          # ≈ 12 px on-screen at TILE_SIZE = 128 — bumpier
+                          # "plastic-toy" silhouette than tighter bevels.
 BEVEL_SEGMENTS = 6        # smoothness of rounding (higher = smoother curve)
 
 

@@ -5,7 +5,7 @@ import { ALL_TYPES, getTileType, CORNER_FILLER_URL } from './tileTypes';
 import { config } from '../config';
 import { collectCornerFillers } from './cornerFillers';
 import level001 from '../levels/level_001.json';
-import grassOverlayUrl from '../assets/overlays/grass_overlay_bright.png?url';
+import grassOverlayUrl from '../assets/overlays/grass_overlay_mid.png?url';
 
 export interface Platform {
   x: number;

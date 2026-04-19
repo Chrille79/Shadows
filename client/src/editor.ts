@@ -4,7 +4,7 @@
 import { WORLD_W, WORLD_H, TILE_SIZE } from './engine/renderer';
 import { TILE_TYPES, DECORATION_TYPES, ALL_TYPES, DEFAULT_TILE_ID, getTileType } from './game/tileTypes';
 import { config } from './config';
-import grassOverlayUrl from './assets/overlays/grass_overlay_bright.png?url';
+import grassOverlayUrl from './assets/overlays/grass_overlay_mid.png?url';
 import level001 from './levels/level_001.json';
 import './dev/settings'; // window.settings helpers — dev only.
 import './dev/panel';    // In-page dev panel (backtick to toggle) — dev only.

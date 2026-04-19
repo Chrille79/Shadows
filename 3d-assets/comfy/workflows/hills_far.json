@@ -1,0 +1,103 @@
+{
+  "prompt": {
+    "1": {
+      "class_type": "CheckpointLoaderSimple",
+      "inputs": {
+        "ckpt_name": "samaritan3dCartoon_v40SDXL.safetensors"
+      }
+    },
+    "2": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "text": "3d render, plastic toy style, distant rolling grass hills under a clear uniform bright blue sky, soft blue-green hills with atmospheric haze, low horizon, hills occupy lower third of image, large empty uniform blue sky above, rounded plastic toy hill shapes, vibrant saturated colors, smooth plastic surfaces, seamless horizontal tileable pattern, continuous hill ridge, no buildings, no clouds, no birds, complete composition, fully contained within frame, no clipped objects, no cut-off, soft margin of empty space around subject, objects centered and whole",
+        "clip": [
+          "1",
+          1
+        ]
+      }
+    },
+    "3": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "text": "realistic, photograph, photo, dark, gritty, horror, dystopian, people, person, character, mario, luigi, princess, creature, animal, mushroom, power-up, star, coin, pipe, castle, house, building, structure, road, path, sign, fence, text, logo, watermark, signature, ui, hud, frame, border, jpeg artifacts, noise, blurry, low quality, worst quality, grain, cropped, cut off, clipped, out of frame, partial object, text label, complex scene, busy composition, crowded, many objects",
+        "clip": [
+          "1",
+          1
+        ]
+      }
+    },
+    "4": {
+      "class_type": "EmptyLatentImage",
+      "inputs": {
+        "width": 1024,
+        "height": 1024,
+        "batch_size": 1
+      }
+    },
+    "8": {
+      "class_type": "SeamlessTile",
+      "inputs": {
+        "model": [
+          "1",
+          0
+        ],
+        "tiling": "x_only",
+        "copy_model": "Make a copy"
+      }
+    },
+    "5": {
+      "class_type": "KSampler",
+      "inputs": {
+        "seed": 2001,
+        "steps": 30,
+        "cfg": 8.0,
+        "sampler_name": "dpmpp_2m",
+        "scheduler": "karras",
+        "denoise": 1.0,
+        "model": [
+          "8",
+          0
+        ],
+        "positive": [
+          "2",
+          0
+        ],
+        "negative": [
+          "3",
+          0
+        ],
+        "latent_image": [
+          "4",
+          0
+        ]
+      }
+    },
+    "6": {
+      "class_type": "VAEDecodeTiled",
+      "inputs": {
+        "samples": [
+          "5",
+          0
+        ],
+        "vae": [
+          "1",
+          2
+        ],
+        "tile_size": 512,
+        "overlap": 64,
+        "temporal_size": 64,
+        "temporal_overlap": 8
+      }
+    },
+    "7": {
+      "class_type": "SaveImage",
+      "inputs": {
+        "images": [
+          "6",
+          0
+        ],
+        "filename_prefix": "shadows_bg"
+      }
+    }
+  }
+}
