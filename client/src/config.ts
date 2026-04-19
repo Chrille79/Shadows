@@ -9,6 +9,22 @@
 
 import raw from './settings.json';
 
+export interface HillWaveConfig {
+  color: { r: number; g: number; b: number; a: number };
+  /** Vertical wave amplitude in world-px. */
+  amplitude: number;
+  /** World-px between the wave's zero-line and groundY. */
+  baseOffset: number;
+  /** Primary sine frequency (radians per world-px). */
+  freq1: number;
+  /** Secondary sine frequency — layered for a less repetitive silhouette. */
+  freq2: number;
+  /** Starting phase offset (radians) — lets near layer differ from far. */
+  phase: number;
+  /** Parallax factor: 0 = locked to camera, 1 = moves 1:1 with world. */
+  parallax: number;
+}
+
 export interface GameConfig {
   physics: {
     gravity: number;
@@ -29,6 +45,24 @@ export interface GameConfig {
     overhang: number;
   };
   worldTint: { r: number; g: number; b: number };
+  sky: {
+    top: { r: number; g: number; b: number };
+    bottom: { r: number; g: number; b: number };
+  };
+  /** Two procedural sine-wave hill bands drawn between the sky gradient
+   *  and the clouds — cheaper and more tunable than AI bg plates. */
+  hills: {
+    far: HillWaveConfig;
+    near: HillWaveConfig;
+  };
+  /** Per-layer on/off toggles for the bg rendering passes.  Off by default
+   *  for the still-in-iteration hill layers; sky + clouds ship on. */
+  layers: {
+    sky: boolean;
+    hillsFar: boolean;
+    hillsNear: boolean;
+    clouds: boolean;
+  };
 }
 
 // Deep clone the JSON import so we don't depend on whether the bundler

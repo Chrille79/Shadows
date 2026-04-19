@@ -1,5 +1,8 @@
 import { initRenderer, GAME_W, GAME_H, TILE_SIZE } from './engine/renderer';
 import { createSpriteRenderer } from './engine/spriteRenderer';
+import { createSkyRenderer } from './engine/skyRenderer';
+import { createHillsRenderer } from './engine/hillsRenderer';
+import { createParallaxRenderer } from './engine/parallaxRenderer';
 import { startGameLoop } from './engine/gameLoop';
 import { createStage, loadStageTextures, renderStage, renderDecorations } from './game/stage';
 import { createCharacter, updateCharacter, renderCharacter, loadCharacterTextures, PLAYER_SPRITES } from './game/character';
@@ -23,6 +26,9 @@ async function main() {
     installInput();
     const renderer = await initRenderer(canvas);
     const sprites = createSpriteRenderer(renderer);
+    const sky = createSkyRenderer(renderer);
+    const hills = createHillsRenderer(renderer);
+    const parallax = await createParallaxRenderer(renderer, sprites);
 
     const stage = createStage();
 
@@ -99,6 +105,15 @@ async function main() {
         renderer.updateProjection(camX, camY);
         sprites.beginFrame();
         const pass = renderer.beginFrame();
+
+        sky.render(pass, camY, stage.worldHeight);
+        if (config.layers.hillsFar) {
+          hills.render(pass, config.hills.far, camX, camY, stage.groundY);
+        }
+        if (config.layers.hillsNear) {
+          hills.render(pass, config.hills.near, camX, camY, stage.groundY);
+        }
+        parallax.render(pass, sprites, camX, camY, stage.groundY, performance.now());
 
         renderDecorations(stage, stage.decorationsBack, sprites, pass);
         renderStage(stage, sprites, pass);

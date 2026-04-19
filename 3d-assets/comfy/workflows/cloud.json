@@ -9,7 +9,7 @@
     "2": {
       "class_type": "CLIPTextEncode",
       "inputs": {
-        "text": "3d render, cycles render, plastic toy silhouette, very distant rolling hills as a gentle low wavy ribbon, smooth rounded plastic-toy hill shapes, simple mono-color surface, soft desaturated pastel blue-green color, heavy atmospheric haze, under a clear empty uniform bright blue sky, hills occupy only bottom 20% of image, vast empty uniform blue sky fills the upper 80%, no surface texture, no leaves, no grass blades, just solid smooth shapes, no mountains, no peaks, no snow, no trees, no bushes, no buildings, no clouds, no birds, no characters, complete composition, fully contained within frame, no clipped objects, no cut-off, soft margin of empty space around subject, objects centered and whole",
+        "text": "3d render, plastic toy style, single isolated fluffy rounded cartoon cumulus cloud centered on a flat uniform bright blue sky, white cloud with soft blue-grey shadow underside, smooth plastic toy surface, vibrant, completely contained within frame, no other objects, no ground, no horizon, complete composition, fully contained within frame, no clipped objects, no cut-off, soft margin of empty space around subject, objects centered and whole",
         "clip": [
           "1",
           1
@@ -29,17 +29,17 @@
     "4": {
       "class_type": "EmptyLatentImage",
       "inputs": {
-        "width": 1024,
-        "height": 1024,
+        "width": 768,
+        "height": 512,
         "batch_size": 1
       }
     },
     "5": {
       "class_type": "KSampler",
       "inputs": {
-        "seed": 5100,
+        "seed": 3301,
         "steps": 30,
-        "cfg": 9.0,
+        "cfg": 8.0,
         "sampler_name": "dpmpp_2m",
         "scheduler": "karras",
         "denoise": 1.0,

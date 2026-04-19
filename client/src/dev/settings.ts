@@ -24,6 +24,10 @@ interface DevSettings {
   grass: typeof config.grass;
   /** Live world-tint {r,g,b}. Individual channels mutable too. */
   worldTint: typeof config.worldTint;
+  /** Per-layer bg render toggles — sky gradient, hills, clouds. */
+  layers: typeof config.layers;
+  /** Procedural hill bands (far + near).  Tune color, amplitude, freq1/2, phase, parallax. */
+  hills: typeof config.hills;
   /** Set r/g/b directly. Example: `settings.tint(0.3, 0.35, 0.45)`. */
   tint(r: number, g: number, b: number): void;
   /** Turn world tint off (all channels = 1). */
@@ -42,6 +46,8 @@ const settings: DevSettings = {
   camera: config.camera,
   grass: config.grass,
   worldTint: config.worldTint,
+  layers: config.layers,
+  hills: config.hills,
 
   tint(r, g, b) {
     config.worldTint.r = r;

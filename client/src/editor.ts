@@ -15,6 +15,10 @@ const HALF = TILE / 2;
 // and the derived grid sizes mutate via resizeWorld().
 let worldW = WORLD_W;
 let worldH = WORLD_H;
+// Horizon line — where parallax bg images anchor their top in the running game.
+// Defaults to 6 tiles above the bottom of the world.  Stored in the level file
+// so designers can tune per level.
+let groundY = worldH - 6 * TILE;
 let COLS = Math.ceil(worldW / TILE);
 let ROWS = Math.ceil(worldH / TILE);
 // Decorations use a half-tile grid: four anchor points per solid tile. Each
@@ -53,6 +57,8 @@ interface LevelFile {
   tileSize: number;
   worldWidth: number;
   worldHeight: number;
+  /** Horizon y in world px — parallax bg images anchor their top here. */
+  groundY?: number;
   platforms: LevelPlatform[];
   decorationsBack?: LevelDecoration[];
   decorationsFront?: LevelDecoration[];
@@ -130,6 +136,23 @@ const tileImages: HTMLImageElement[] = ALL_TYPES.map((t) => {
 const grassOverlayImg = new Image();
 grassOverlayImg.src = grassOverlayUrl;
 grassOverlayImg.onload = () => draw();
+
+// Cloud sprites — drawn as <img> in the editor 2D canvas to mirror the
+// in-game sprite pass.  Hill layers are fully procedural (sine waves in the
+// game's WGSL shader) so they don't need any image loading here — we just
+// re-derive the same math with Canvas2D fillPath below.
+const cloud01Img = new Image();
+cloud01Img.src = new URL('./assets/backgrounds/cloud_01.png', import.meta.url).href;
+cloud01Img.onload = () => draw();
+const cloud02Img = new Image();
+cloud02Img.src = new URL('./assets/backgrounds/cloud_02.png', import.meta.url).href;
+cloud02Img.onload = () => draw();
+
+// View toggles — user can hide any preview layer to focus on tile editing.
+let showSky = true;
+let showHills = true;
+let showClouds = true;
+let showGrid = true;
 // Grass rendering values come from the shared `config.grass` — same as the
 // in-game grass pass in stage.ts — so the editor preview stays in sync when
 // designers tweak via the dev console.
@@ -306,31 +329,98 @@ function anchorXFor(gx: number) { return (gx + 0.5) * HALF; }
 function anchorYFor(gy: number) { return (gy + 1) * HALF; }
 
 function draw() {
-  // Match the game's sky clear color so the editor canvas previews the
-  // eventual in-game background.
-  ctx.fillStyle = '#87cdf2';
+  // Sky background — either a gradient matching the in-game sky pass, or
+  // a flat fallback color when the sky view toggle is off (still readable
+  // against grid lines).
+  if (showSky) {
+    // Preview the in-game vertical gradient (same colors as config.sky).
+    const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    grad.addColorStop(0, `rgb(${Math.round(config.sky.top.r * 255)},`
+      + `${Math.round(config.sky.top.g * 255)},${Math.round(config.sky.top.b * 255)})`);
+    grad.addColorStop(1, `rgb(${Math.round(config.sky.bottom.r * 255)},`
+      + `${Math.round(config.sky.bottom.g * 255)},${Math.round(config.sky.bottom.b * 255)})`);
+    ctx.fillStyle = grad;
+  } else {
+    ctx.fillStyle = '#1d1d28';
+  }
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // Grid lines
-  ctx.strokeStyle = '#24243055';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  for (let c = 0; c <= COLS; c++) {
-    const x = c * TILE + 0.5;
-    ctx.moveTo(x, 0); ctx.lineTo(x, ROWS * TILE);
+  // Hills — procedural sine-wave ribbons (same math as hillsRenderer.ts's
+  // WGSL shader).  No parallax in the editor; we sample the wave at raw
+  // world-x so the preview matches how the game looks at camX = 0.
+  if (showHills) {
+    const drawWave = (layer: typeof config.hills.far) => {
+      const { r, g, b, a } = layer.color;
+      ctx.fillStyle = `rgba(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)},${a})`;
+      ctx.beginPath();
+      const step = 8; // world-px between sample points — smooth enough at canvas scale
+      ctx.moveTo(0, canvas.height);
+      for (let x = 0; x <= canvas.width; x += step) {
+        const wave =
+          Math.sin(x * layer.freq1 + layer.phase) * 0.6 +
+          Math.sin(x * layer.freq2 + layer.phase * 1.7) * 0.4;
+        const y = groundY - layer.baseOffset - wave * layer.amplitude;
+        ctx.lineTo(x, y);
+      }
+      ctx.lineTo(canvas.width, canvas.height);
+      ctx.closePath();
+      ctx.fill();
+    };
+    drawWave(config.hills.far);
+    drawWave(config.hills.near);
   }
-  for (let r = 0; r <= ROWS; r++) {
-    const y = r * TILE + 0.5;
-    ctx.moveTo(0, y); ctx.lineTo(COLS * TILE, y);
-  }
-  ctx.stroke();
 
-  // Ground line hint at y=900
-  ctx.strokeStyle = '#3a5a8a88';
-  ctx.lineWidth = 2;
+  // Clouds live in the sky above groundY in world space — same anchors as
+  // parallaxRenderer.ts clouds[] array.  Editor shows them at their drift=0
+  // rest position; the game animates them.
+  if (showClouds) {
+    const GAME_W_PX = 1920;
+    const cloudAnchors = [
+      { img: cloud01Img, baseX: 400,  yOff: -900,  scale: 0.6 },
+      { img: cloud02Img, baseX: 1300, yOff: -700,  scale: 0.5 },
+      { img: cloud01Img, baseX: 2400, yOff: -1000, scale: 0.45 },
+    ];
+    for (const c of cloudAnchors) {
+      if (!(c.img.complete && c.img.naturalWidth > 0)) continue;
+      const w = c.img.naturalWidth * c.scale;
+      const h = c.img.naturalHeight * c.scale;
+      const y = groundY + c.yOff;
+      // Repeat anchors across world width so the preview shows clouds along
+      // the whole map, not just within the first GAME_W-band.
+      for (let x0 = 0; x0 < canvas.width; x0 += GAME_W_PX) {
+        ctx.drawImage(c.img, x0 + c.baseX, y, w, h);
+      }
+    }
+  }
+
+  // Grid lines
+  if (showGrid) {
+    ctx.strokeStyle = '#24243055';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let c = 0; c <= COLS; c++) {
+      const x = c * TILE + 0.5;
+      ctx.moveTo(x, 0); ctx.lineTo(x, ROWS * TILE);
+    }
+    for (let r = 0; r <= ROWS; r++) {
+      const y = r * TILE + 0.5;
+      ctx.moveTo(0, y); ctx.lineTo(COLS * TILE, y);
+    }
+    ctx.stroke();
+  }
+
+  // Horizon line — where parallax bg images anchor in the running game.
+  // Above this y the game shows pure sky gradient; below, hills/bg layers.
+  ctx.strokeStyle = '#e8a533';
+  ctx.lineWidth = 3;
+  ctx.setLineDash([14, 10]);
   ctx.beginPath();
-  ctx.moveTo(0, 900); ctx.lineTo(canvas.width, 900);
+  ctx.moveTo(0, groundY + 0.5); ctx.lineTo(canvas.width, groundY + 0.5);
   ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#e8a533';
+  ctx.font = 'bold 18px ui-monospace, Consolas, monospace';
+  ctx.fillText('horizon (ground Y)', 12, groundY - 8);
 
   // Decorations back — drawn before solid so tiles can occlude deco that
   // extends into the ground row (matches game render order).
@@ -842,6 +932,39 @@ document.getElementById('btn-world-size')!.addEventListener('click', async () =>
   flashStatus(`World resized to ${nc} x ${nr} tiles (${worldW} x ${worldH} px)`);
 });
 
+// View menu — toggle preview layers.  Checkboxes close the menu on change
+// via the existing menu-open handler, so we just flip the flag and redraw.
+const viewLayerConfig: Array<[string, (v: boolean) => void, () => boolean]> = [
+  ['layer-sky',    (v) => { showSky    = v; }, () => showSky],
+  ['layer-hills',  (v) => { showHills  = v; }, () => showHills],
+  ['layer-clouds', (v) => { showClouds = v; }, () => showClouds],
+  ['layer-grid',   (v) => { showGrid   = v; }, () => showGrid],
+];
+for (const [id, set, get] of viewLayerConfig) {
+  const cb = document.getElementById(id) as HTMLInputElement | null;
+  if (!cb) continue;
+  cb.checked = get();
+  cb.addEventListener('change', () => { set(cb.checked); draw(); });
+}
+
+document.getElementById('btn-horizon')!.addEventListener('click', async () => {
+  const rowsInput = await askText(
+    `Horizon (ground-Y) in tile rows from top. Parallax bg images sit from here ` +
+    `downward; above is pure sky gradient.`,
+    `${Math.round(groundY / TILE)}`,
+    'Horizon row',
+  );
+  if (!rowsInput) return;
+  const rows = +rowsInput;
+  if (!Number.isFinite(rows) || rows < 0 || rows > ROWS) {
+    alert(`Row must be between 0 and ${ROWS}`);
+    return;
+  }
+  groundY = Math.round(rows) * TILE;
+  draw();
+  flashStatus(`Horizon set to row ${Math.round(rows)} (y=${groundY}px)`);
+});
+
 document.getElementById('btn-clear')!.addEventListener('click', async () => {
   const label = activeLayer === 'solid' ? 'all tiles'
               : activeLayer === 'back'  ? 'decorations (back)'
@@ -922,6 +1045,7 @@ function serializeLevel(): LevelFile {
   return {
     version: LEVEL_VERSION, tileSize: TILE,
     worldWidth: worldW, worldHeight: worldH,
+    groundY,
     platforms,
     decorationsBack: serializeDeco(gridBack),
     decorationsFront: serializeDeco(gridFront),
@@ -956,6 +1080,11 @@ function loadLevel(data: LevelFile) {
     const nc = Math.max(1, Math.round(data.worldWidth / TILE));
     const nr = Math.max(1, Math.round(data.worldHeight / TILE));
     if (nc !== COLS || nr !== ROWS) resizeWorld(nc, nr);
+  }
+  if (typeof data.groundY === 'number') {
+    groundY = data.groundY;
+  } else {
+    groundY = worldH - 6 * TILE;
   }
   grid.fill(0);
   grassGrid.fill(0);

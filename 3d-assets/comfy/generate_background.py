@@ -67,37 +67,43 @@ CONTAINMENT_HINT = (
 LAYER_PROMPTS: dict[str, dict] = {
     "hills_far": {
         "positive": (
-            "3d render, plastic toy style, "
-            "distant rolling grass hills under a clear uniform bright blue sky, "
-            "soft blue-green hills with atmospheric haze, low horizon, "
-            "hills occupy lower third of image, large empty uniform blue sky above, "
-            "rounded plastic toy hill shapes, vibrant saturated colors, "
-            "smooth plastic surfaces, seamless horizontal tileable pattern, "
-            "continuous hill ridge, no buildings, no clouds, no birds, "
+            "3d render, cycles render, plastic toy silhouette, "
+            "very distant rolling hills as a gentle low wavy ribbon, "
+            "smooth rounded plastic-toy hill shapes, simple mono-color surface, "
+            "soft desaturated pastel blue-green color, heavy atmospheric haze, "
+            "under a clear empty uniform bright blue sky, "
+            "hills occupy only bottom 20% of image, "
+            "vast empty uniform blue sky fills the upper 80%, "
+            "no surface texture, no leaves, no grass blades, just solid smooth shapes, "
+            "no mountains, no peaks, no snow, no trees, no bushes, "
+            "no buildings, no clouds, no birds, no characters, "
             f"{CONTAINMENT_HINT}"
         ),
         "out": "bg_hills_far.png",
         "width": 1024,
         "height": 1024,
         "transparent": True,
-        "tileable_x": True,
+        "tileable_x": False,
     },
     "hills_near": {
         "positive": (
-            "3d render, plastic toy style, "
-            "closer grass hills with a few cartoon trees and bushes "
-            "under a clear uniform bright blue sky, "
-            "hills and trees occupy lower half, large empty uniform blue sky above, "
-            "rounded plastic toy shapes, vibrant saturated greens, "
-            "smooth plastic surfaces, seamless horizontal tileable pattern, "
-            "continuous landscape strip, no buildings, no clouds, no birds, "
+            "3d render, cycles render, plastic toy silhouette, "
+            "mid-distance rolling green grass hills as a gentle wavy ribbon, "
+            "smooth rounded plastic-toy hill shapes with a few small rounded bush blobs, "
+            "simple mono-color green surface, mild atmospheric haze, "
+            "under a clear empty uniform bright blue sky, "
+            "hills occupy only bottom 30% of image, "
+            "vast empty uniform blue sky fills the upper 70%, "
+            "no surface texture, no leaves, no grass blades, just solid smooth shapes, "
+            "no tall trees, no large trees, no dominant foliage, no mountains, "
+            "no peaks, no snow, no buildings, no clouds, no birds, no characters, "
             f"{CONTAINMENT_HINT}"
         ),
         "out": "bg_hills_near.png",
         "width": 1024,
         "height": 1024,
         "transparent": True,
-        "tileable_x": True,
+        "tileable_x": False,
     },
     "cloud": {
         "positive": (
@@ -268,6 +274,14 @@ def sky_to_alpha(png_bytes: bytes, tolerance: int = 55,
                 ng = max(0, min(255, int(g - kg * inv * 0.4)))
                 nb = max(0, min(255, int(b - kb * inv * 0.4)))
                 px[x, y] = (nr, ng, nb, alpha)
+
+    # Trim to the non-transparent bounding box so image-top = silhouette-top.
+    # Callers can then anchor the image by its top and know exactly where the
+    # visible silhouette begins.
+    bbox = img.getbbox()  # excludes fully-transparent pixels
+    if bbox is not None:
+        img = img.crop(bbox)
+        print(f"[alpha] cropped to {img.size} (bbox {bbox})")
 
     print(f"[alpha] sky key RGB={key}")
     out = io.BytesIO()

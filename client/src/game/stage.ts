@@ -49,6 +49,10 @@ export interface Stage {
   worldWidth: number;
   /** World height in pixels. Per-level now; falls back to WORLD_H if missing. */
   worldHeight: number;
+  /** World-y where the parallax bg images anchor their top edge. Above this
+   *  y only the sky gradient shows. Defaults to worldHeight - 2*tileSize if
+   *  missing from the level file. */
+  groundY: number;
   platforms: Platform[];
   /** Drawn after solid tiles, before the player — player walks in front. */
   decorationsBack: Decoration[];
@@ -69,6 +73,8 @@ interface LevelFile {
   tileSize: number;
   worldWidth: number;
   worldHeight: number;
+  /** Optional horizon line — where parallax bg images sit.  Missing → default. */
+  groundY?: number;
   platforms: Array<Partial<Platform> & { x: number; y: number; width: number; height: number }>;
   decorationsBack?: Array<{ x: number; y: number; type?: string }>;
   decorationsFront?: Array<{ x: number; y: number; type?: string }>;
@@ -82,11 +88,13 @@ function parseDecorations(items: LevelFile['decorationsBack']): Decoration[] {
 }
 
 function stageFromFile(data: LevelFile): Stage {
+  const worldHeight = data.worldHeight ?? WORLD_H;
   return {
     typeResources: new Map(),
     overlays: {},
     worldWidth: data.worldWidth ?? WORLD_W,
-    worldHeight: data.worldHeight ?? WORLD_H,
+    worldHeight,
+    groundY: data.groundY ?? worldHeight - 6 * (data.tileSize ?? TILE_SIZE),
     platforms: data.platforms.map((p) => ({
       x: p.x, y: p.y, width: p.width, height: p.height,
       type: getTileType(p.type).id,

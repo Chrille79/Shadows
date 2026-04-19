@@ -9,7 +9,7 @@
     "2": {
       "class_type": "CLIPTextEncode",
       "inputs": {
-        "text": "3d render, cycles render, plastic toy silhouette, very distant rolling hills as a gentle low wavy ribbon, smooth rounded plastic-toy hill shapes, simple mono-color surface, soft desaturated pastel blue-green color, heavy atmospheric haze, under a clear empty uniform bright blue sky, hills occupy only bottom 20% of image, vast empty uniform blue sky fills the upper 80%, no surface texture, no leaves, no grass blades, just solid smooth shapes, no mountains, no peaks, no snow, no trees, no bushes, no buildings, no clouds, no birds, no characters, complete composition, fully contained within frame, no clipped objects, no cut-off, soft margin of empty space around subject, objects centered and whole",
+        "text": "3d render, cycles render, plastic toy silhouette, mid-distance rolling green grass hills as a gentle wavy ribbon, smooth rounded plastic-toy hill shapes with a few small rounded bush blobs, simple mono-color green surface, mild atmospheric haze, under a clear empty uniform bright blue sky, hills occupy only bottom 30% of image, vast empty uniform blue sky fills the upper 70%, no surface texture, no leaves, no grass blades, just solid smooth shapes, no tall trees, no large trees, no dominant foliage, no mountains, no peaks, no snow, no buildings, no clouds, no birds, no characters, complete composition, fully contained within frame, no clipped objects, no cut-off, soft margin of empty space around subject, objects centered and whole",
         "clip": [
           "1",
           1
@@ -37,7 +37,7 @@
     "5": {
       "class_type": "KSampler",
       "inputs": {
-        "seed": 5100,
+        "seed": 5200,
         "steps": 30,
         "cfg": 9.0,
         "sampler_name": "dpmpp_2m",

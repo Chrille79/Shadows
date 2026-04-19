@@ -3,6 +3,7 @@
   "tileSize": 128,
   "worldWidth": 7680,
   "worldHeight": 3840,
+  "groundY": 3000,
   "platforms": [
     { "x": 0,    "y": 3328, "width": 7680, "height": 512, "type": "block_green", "grass": true },
     { "x": 1024, "y": 3200, "width": 640,  "height": 128, "type": "block_brown", "grass": true },

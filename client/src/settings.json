@@ -17,5 +17,35 @@
     "displayH": 64,
     "overhang": 8
   },
-  "worldTint": { "r": 1, "g": 1, "b": 1 }
+  "worldTint": { "r": 1, "g": 1, "b": 1 },
+  "sky": {
+    "top": { "r": 0.36, "g": 0.66, "b": 0.92 },
+    "bottom": { "r": 0.70, "g": 0.87, "b": 0.97 }
+  },
+  "hills": {
+    "far": {
+      "color": { "r": 0.62, "g": 0.82, "b": 0.90, "a": 1.0 },
+      "amplitude": 90,
+      "baseOffset": 140,
+      "freq1": 0.0022,
+      "freq2": 0.0051,
+      "phase": 0.0,
+      "parallax": 0.15
+    },
+    "near": {
+      "color": { "r": 0.46, "g": 0.76, "b": 0.78, "a": 1.0 },
+      "amplitude": 130,
+      "baseOffset": 20,
+      "freq1": 0.0035,
+      "freq2": 0.0085,
+      "phase": 1.7,
+      "parallax": 0.35
+    }
+  },
+  "layers": {
+    "sky": true,
+    "hillsFar": true,
+    "hillsNear": true,
+    "clouds": true
+  }
 }

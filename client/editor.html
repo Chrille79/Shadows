@@ -189,8 +189,18 @@
         <li><label for="import-file">Import JSON</label></li>
         <li class="divider"></li>
         <li><button id="btn-world-size">World size&hellip;</button></li>
+        <li><button id="btn-horizon">Horizon (ground Y)&hellip;</button></li>
         <li class="divider"></li>
         <li><button id="btn-clear">Clear All</button></li>
+      </ul>
+    </div>
+    <div class="menu" data-menu="view">
+      <button class="menu-label">View</button>
+      <ul class="menu-items">
+        <li data-sticky><label class="check-item"><input type="checkbox" id="layer-sky" checked> Sky gradient</label></li>
+        <li data-sticky><label class="check-item"><input type="checkbox" id="layer-hills" checked> Hills (parallax)</label></li>
+        <li data-sticky><label class="check-item"><input type="checkbox" id="layer-clouds" checked> Clouds</label></li>
+        <li data-sticky><label class="check-item"><input type="checkbox" id="layer-grid" checked> Grid</label></li>
       </ul>
     </div>
     <input type="file" id="import-file" accept=".json,application/json" />
