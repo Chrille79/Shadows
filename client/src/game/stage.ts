@@ -87,7 +87,7 @@ function parseDecorations(items: LevelFile['decorationsBack']): Decoration[] {
   return items.map((d) => ({ x: d.x, y: d.y, type: getTileType(d.type).id }));
 }
 
-function stageFromFile(data: LevelFile): Stage {
+export function stageFromFile(data: LevelFile): Stage {
   const worldHeight = data.worldHeight ?? WORLD_H;
   return {
     typeResources: new Map(),

@@ -2,6 +2,8 @@
 // Paints a tile grid; saves/loads level data compatible with game/stage.ts.
 
 import { WORLD_W, WORLD_H, TILE_SIZE } from './engine/renderer';
+import { createWorldRenderer, type WorldRenderer } from './engine/worldRenderer';
+import { stageFromFile, type Stage } from './game/stage';
 import { TILE_TYPES, DECORATION_TYPES, ALL_TYPES, DEFAULT_TILE_ID, getTileType } from './game/tileTypes';
 import { config } from './config';
 import grassOverlayUrl from './assets/overlays/grass_overlay_mid.png?url';
@@ -80,6 +82,8 @@ type ActiveLayer = 'solid' | 'back' | 'front';
 let activeLayer: ActiveLayer = 'solid';
 
 const canvas = document.getElementById('editor-canvas') as HTMLCanvasElement;
+const bgCanvas = document.getElementById('editor-bg-canvas') as HTMLCanvasElement;
+const stackEl = document.getElementById('canvas-stack') as HTMLDivElement;
 const ctx = canvas.getContext('2d');
 if (!ctx) {
   throw new Error('Failed to get 2d canvas context for editor.');
@@ -87,13 +91,61 @@ if (!ctx) {
 canvas.width = worldW;
 canvas.height = worldH;
 
+// WebGPU world renderer for the background layers (sky gradient, hill
+// ribbons, drifting clouds).  Rendered behind the 2D editor canvas —
+// same shader path as the in-game renderer, so new bg features never
+// drift between game and editor.  Tiles/grid/hover stay in the 2D layer
+// above.  Init is async; until it resolves the bg canvas stays blank
+// and draw() just paints the 2D chrome.
+let bgWorld: WorldRenderer | null = null;
+bgCanvas.width = worldW;
+bgCanvas.height = worldH;
+
+async function initBgWorld() {
+  try {
+    bgWorld = await createWorldRenderer({
+      canvas: bgCanvas,
+      viewportW: worldW,
+      viewportH: worldH,
+      fitWindow: false,
+    });
+    draw(); // first frame with bg now that WebGPU is ready
+  } catch (err) {
+    console.warn('[editor] WebGPU bg init failed; bg will be blank:', err);
+  }
+}
+void initBgWorld();
+
+function buildEditorStage(): Stage {
+  // Editor's bg pass only needs a stage shell with groundY set so hills
+  // anchor correctly.  Tiles and decorations stay in the 2D layer for now
+  // — we render a stage with empty platform/decoration arrays so the
+  // shared renderer's stage/decoration passes do nothing here.
+  return {
+    worldWidth: worldW,
+    worldHeight: worldH,
+    groundY,
+    platforms: [],
+    decorationsBack: [],
+    decorationsFront: [],
+    typeResources: new Map(),
+    overlays: {},
+  };
+}
+
 // Display scale is adjustable with Ctrl+Scroll.
 const MIN_SCALE = 0.1;
 const MAX_SCALE = 3.0;
 let displayScale = 0.5;
 function applyDisplayScale() {
-  canvas.style.width = `${worldW * displayScale}px`;
-  canvas.style.height = `${worldH * displayScale}px`;
+  const w = `${worldW * displayScale}px`;
+  const h = `${worldH * displayScale}px`;
+  canvas.style.width = w;
+  canvas.style.height = h;
+  bgCanvas.style.width = w;
+  bgCanvas.style.height = h;
+  stackEl.style.width = w;
+  stackEl.style.height = h;
 }
 applyDisplayScale();
 
@@ -136,17 +188,6 @@ const tileImages: HTMLImageElement[] = ALL_TYPES.map((t) => {
 const grassOverlayImg = new Image();
 grassOverlayImg.src = grassOverlayUrl;
 grassOverlayImg.onload = () => draw();
-
-// Cloud sprites — drawn as <img> in the editor 2D canvas to mirror the
-// in-game sprite pass.  Hill layers are fully procedural (sine waves in the
-// game's WGSL shader) so they don't need any image loading here — we just
-// re-derive the same math with Canvas2D fillPath below.
-const cloud01Img = new Image();
-cloud01Img.src = new URL('./assets/backgrounds/cloud_01.png', import.meta.url).href;
-cloud01Img.onload = () => draw();
-const cloud02Img = new Image();
-cloud02Img.src = new URL('./assets/backgrounds/cloud_02.png', import.meta.url).href;
-cloud02Img.onload = () => draw();
 
 // View toggles — user can hide any preview layer to focus on tile editing.
 let showSky = true;
@@ -328,70 +369,45 @@ function activeDecoGrid(): Uint8Array | null {
 function anchorXFor(gx: number) { return (gx + 0.5) * HALF; }
 function anchorYFor(gy: number) { return (gy + 1) * HALF; }
 
+function drawBackground() {
+  // Background layers (sky gradient, procedural hills, drifting clouds) are
+  // rendered by the shared WebGPU world renderer on #editor-bg-canvas.  We
+  // just ask it for one frame — same passes the in-game renderer runs, so
+  // the editor automatically reflects any bg tweaks without a separate
+  // implementation to keep in sync.
+  //
+  // The view checkboxes (showSky/showHills/showClouds) temporarily override
+  // config.layers during this one renderFrame call, then we restore — avoids
+  // leaking editor-local state into the running game if both are open.
+  if (!bgWorld) return;
+  const stage = buildEditorStage();
+
+  const saved = { ...config.layers };
+  config.layers.sky = showSky;
+  config.layers.hillsFar = showHills;
+  config.layers.hillsNear = showHills;
+  config.layers.clouds = showClouds;
+  try {
+    bgWorld.renderFrame({
+      stage,
+      camX: 0,
+      camY: 0,
+      nowMs: performance.now(),
+    });
+  } finally {
+    config.layers.sky = saved.sky;
+    config.layers.hillsFar = saved.hillsFar;
+    config.layers.hillsNear = saved.hillsNear;
+    config.layers.clouds = saved.clouds;
+  }
+}
+
 function draw() {
-  // Sky background — either a gradient matching the in-game sky pass, or
-  // a flat fallback color when the sky view toggle is off (still readable
-  // against grid lines).
-  if (showSky) {
-    // Preview the in-game vertical gradient (same colors as config.sky).
-    const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
-    grad.addColorStop(0, `rgb(${Math.round(config.sky.top.r * 255)},`
-      + `${Math.round(config.sky.top.g * 255)},${Math.round(config.sky.top.b * 255)})`);
-    grad.addColorStop(1, `rgb(${Math.round(config.sky.bottom.r * 255)},`
-      + `${Math.round(config.sky.bottom.g * 255)},${Math.round(config.sky.bottom.b * 255)})`);
-    ctx.fillStyle = grad;
-  } else {
-    ctx.fillStyle = '#1d1d28';
-  }
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  drawBackground();
 
-  // Hills — procedural sine-wave ribbons (same math as hillsRenderer.ts's
-  // WGSL shader).  No parallax in the editor; we sample the wave at raw
-  // world-x so the preview matches how the game looks at camX = 0.
-  if (showHills) {
-    const drawWave = (layer: typeof config.hills.far) => {
-      const { r, g, b, a } = layer.color;
-      ctx.fillStyle = `rgba(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)},${a})`;
-      ctx.beginPath();
-      const step = 8; // world-px between sample points — smooth enough at canvas scale
-      ctx.moveTo(0, canvas.height);
-      for (let x = 0; x <= canvas.width; x += step) {
-        const wave =
-          Math.sin(x * layer.freq1 + layer.phase) * 0.6 +
-          Math.sin(x * layer.freq2 + layer.phase * 1.7) * 0.4;
-        const y = groundY - layer.baseOffset - wave * layer.amplitude;
-        ctx.lineTo(x, y);
-      }
-      ctx.lineTo(canvas.width, canvas.height);
-      ctx.closePath();
-      ctx.fill();
-    };
-    drawWave(config.hills.far);
-    drawWave(config.hills.near);
-  }
-
-  // Clouds live in the sky above groundY in world space — same anchors as
-  // parallaxRenderer.ts clouds[] array.  Editor shows them at their drift=0
-  // rest position; the game animates them.
-  if (showClouds) {
-    const GAME_W_PX = 1920;
-    const cloudAnchors = [
-      { img: cloud01Img, baseX: 400,  yOff: -900,  scale: 0.6 },
-      { img: cloud02Img, baseX: 1300, yOff: -700,  scale: 0.5 },
-      { img: cloud01Img, baseX: 2400, yOff: -1000, scale: 0.45 },
-    ];
-    for (const c of cloudAnchors) {
-      if (!(c.img.complete && c.img.naturalWidth > 0)) continue;
-      const w = c.img.naturalWidth * c.scale;
-      const h = c.img.naturalHeight * c.scale;
-      const y = groundY + c.yOff;
-      // Repeat anchors across world width so the preview shows clouds along
-      // the whole map, not just within the first GAME_W-band.
-      for (let x0 = 0; x0 < canvas.width; x0 += GAME_W_PX) {
-        ctx.drawImage(c.img, x0 + c.baseX, y, w, h);
-      }
-    }
-  }
+  // 2D canvas paints tiles, grid, horizon line, and hover chrome over the
+  // WebGPU bg.  Clear to transparent so the bg canvas below shows through.
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   // Grid lines
   if (showGrid) {
@@ -638,6 +654,15 @@ function resizeWorld(newCols: number, newRows: number) {
 
   canvas.width = worldW;
   canvas.height = worldH;
+  bgCanvas.width = worldW;
+  bgCanvas.height = worldH;
+  // WebGPU viewport is bound at init time; re-create so shaders see the
+  // new world dims.  Rare event (user changes world size), re-init is cheap.
+  if (bgWorld) {
+    bgWorld.dispose();
+    bgWorld = null;
+    void initBgWorld();
+  }
 
   fitZoomToWrap();
   draw();
