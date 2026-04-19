@@ -60,7 +60,10 @@ fn fs(in: VSOut) -> @location(0) vec4f {
     sin(sx * u.freq1 + u.phase) * 0.6 +
     sin(sx * u.freq2 + u.phase * 1.7) * 0.4;
   let hillTop = u.groundY - u.baseOffset - wave * u.amplitude;
-  if (y < hillTop) { discard; }
+  // Hills are a band that rises from the horizon: strictly between hillTop
+  // and groundY.  Above hillTop → sky; at or below groundY → let ground
+  // platforms (or other passes) fill in.
+  if (y < hillTop || y >= u.groundY) { discard; }
   return u.color;
 }
 `;

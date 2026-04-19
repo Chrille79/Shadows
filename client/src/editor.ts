@@ -132,6 +132,7 @@ async function initBgWorld() {
     await loadStageTextures(allStage, bgWorld.renderer.device, bgWorld.sprites);
     preloadedTypes = allStage.typeResources;
     preloadedOverlays = allStage.overlays;
+    invalidateEditorStage(); // blow any pre-preload cache so tiles re-bind
     draw(); // first frame now that WebGPU + textures are ready
   } catch (err) {
     console.warn('[editor] WebGPU bg init failed; bg will be blank:', err);
@@ -160,8 +161,14 @@ function buildEditorStage(): Stage {
   const stage = stageFromFile(data);
   if (preloadedTypes) stage.typeResources = preloadedTypes;
   if (preloadedOverlays) stage.overlays = preloadedOverlays;
-  cachedEditorStage = stage;
-  editorStageDirty = false;
+  // Only cache once preload has finished — otherwise a RAF tick that fires
+  // after `bgWorld` resolves but before `loadStageTextures` finishes would
+  // cache a Stage with an empty typeResources map, which then permanently
+  // renders every tile as the purple "missing texture" fallback.
+  if (preloadedTypes && preloadedOverlays) {
+    cachedEditorStage = stage;
+    editorStageDirty = false;
+  }
   return stage;
 }
 
