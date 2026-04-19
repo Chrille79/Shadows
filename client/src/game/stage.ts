@@ -3,7 +3,7 @@ import { loadTextureBitmap } from '../engine/textureLoader';
 import { TILE_SIZE, WORLD_W, WORLD_H } from '../engine/renderer';
 import { ALL_TYPES, getTileType, CORNER_FILLER_URL } from './tileTypes';
 import { config } from '../config';
-import { collectCornerFillers } from './cornerFillers';
+import { collectCornerFillers, type FillerQuad } from './cornerFillers';
 import level001 from '../levels/level_001.json';
 import grassOverlayUrl from '../assets/overlays/grass_overlay_mid.png?url';
 
@@ -44,6 +44,33 @@ interface OverlayResources {
   grassOverlay?: { bindGroup: GPUBindGroup; w: number; h: number };
 }
 
+/** Platform-derived tables that are expensive to rebuild each frame.  Built
+ *  lazily on first render and re-used until the Stage itself is replaced
+ *  (editor rebuilds the Stage on every grid mutation, so we don't need an
+ *  invalidation API here). */
+interface DerivedStage {
+  fillers: FillerQuad[];
+  grassCells: Uint8Array;
+  gw: number;
+  gh: number;
+  hasGrass: boolean;
+  /** Platforms grouped by type id so the per-frame renderer doesn't need to
+   *  allocate a grouping Map every frame.  Culling still happens per frame. */
+  platformsByType: Map<string, Platform[]>;
+  decorationsBackByType: Map<string, Decoration[]>;
+  decorationsFrontByType: Map<string, Decoration[]>;
+}
+
+function groupByType<T extends { type: string }>(items: T[]): Map<string, T[]> {
+  const out = new Map<string, T[]>();
+  for (const item of items) {
+    const list = out.get(item.type);
+    if (list) list.push(item);
+    else out.set(item.type, [item]);
+  }
+  return out;
+}
+
 export interface Stage {
   /** World width in pixels. Per-level now; falls back to WORLD_W if missing. */
   worldWidth: number;
@@ -60,6 +87,8 @@ export interface Stage {
   decorationsFront: Decoration[];
   typeResources: Map<string, TypeResources>;
   overlays: OverlayResources;
+  /** Cached derived tables — filled on first render. */
+  derived?: DerivedStage;
 }
 
 const LEVEL_STORAGE_KEY = 'shadows:level';
@@ -171,48 +200,105 @@ export async function loadStageTextures(stage: Stage, device: GPUDevice, sprites
   stage.overlays.grassOverlay = grass;
 }
 
-export function renderStage(stage: Stage, sprites: SpriteRenderer, pass: GPURenderPassEncoder) {
+/** Rect covering what the current frame will actually show — used to cull
+ *  platforms, decorations and grass cells so CPU cost scales with visible
+ *  area rather than world size.  The game passes its camera viewport; the
+ *  editor passes the whole world so everything still draws. */
+export interface ViewRect {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+function overlaps(p: Platform, v: ViewRect): boolean {
+  return p.x < v.maxX && p.x + p.width > v.minX
+      && p.y < v.maxY && p.y + p.height > v.minY;
+}
+
+function buildDerived(stage: Stage): DerivedStage {
+  const gw = Math.ceil(stage.worldWidth / TILE_SIZE);
+  const gh = Math.ceil(stage.worldHeight / TILE_SIZE);
+  const grassCells = new Uint8Array(gw * gh);
+  let hasGrass = false;
+  for (const p of stage.platforms) {
+    if (!p.grass) continue;
+    hasGrass = true;
+    const cx0 = Math.floor(p.x / TILE_SIZE);
+    const cy0 = Math.floor(p.y / TILE_SIZE);
+    const cx1 = Math.ceil((p.x + p.width) / TILE_SIZE);
+    const cy1 = Math.ceil((p.y + p.height) / TILE_SIZE);
+    for (let cy = cy0; cy < cy1; cy++) {
+      if (cy < 0 || cy >= gh) continue;
+      for (let cx = cx0; cx < cx1; cx++) {
+        if (cx < 0 || cx >= gw) continue;
+        grassCells[cy * gw + cx] = 1;
+      }
+    }
+  }
+  const fillers = collectCornerFillers(stage);
+  return {
+    fillers, grassCells, gw, gh, hasGrass,
+    platformsByType: groupByType(stage.platforms),
+    decorationsBackByType: groupByType(stage.decorationsBack),
+    decorationsFrontByType: groupByType(stage.decorationsFront),
+  };
+}
+
+export function renderStage(
+  stage: Stage,
+  sprites: SpriteRenderer,
+  pass: GPURenderPassEncoder,
+  view: ViewRect,
+) {
+  const derived = stage.derived ??= buildDerived(stage);
+
   // Pass 1 — corner fillers drawn FIRST so the surrounding blocks occlude
   // everything except the transparent diamond gap at their shared corner.
   if (stage.overlays.cornerFiller) {
-    const fillers = collectCornerFillers(stage);
+    const fillers = derived.fillers;
     if (fillers.length > 0) {
+      const margin = TILE_SIZE;
+      let emitted = 0;
       for (const f of fillers) {
+        if (f.x < view.minX - margin || f.x > view.maxX + margin
+         || f.y < view.minY - margin || f.y > view.maxY + margin) continue;
         sprites.drawSprite({
           x: f.x - f.size / 2, y: f.y - f.size / 2,
           width: f.size, height: f.size,
           uvX: 0, uvY: 0, uvW: 1, uvH: 1,
           r: config.worldTint.r, g: config.worldTint.g, b: config.worldTint.b, a: 1,
         });
+        emitted++;
       }
-      sprites.flushWithTexture(pass, stage.overlays.cornerFiller.bindGroup);
+      if (emitted > 0) sprites.flushWithTexture(pass, stage.overlays.cornerFiller.bindGroup);
     }
   }
 
-  // Pass 2 — each block type as a batch with its own texture.
-  const byType = new Map<string, Platform[]>();
-  for (const p of stage.platforms) {
-    const list = byType.get(p.type);
-    if (list) list.push(p);
-    else byType.set(p.type, [p]);
-  }
-
-  for (const [typeId, platforms] of byType) {
+  // Pass 2 — each block type as a batch with its own texture. Platforms are
+  // pre-grouped in `derived.platformsByType`; culling happens inline so each
+  // group only emits sprites for visible members, then flushes once.
+  for (const [typeId, platforms] of derived.platformsByType) {
     const res = stage.typeResources.get(typeId);
     if (!res) {
+      let emitted = 0;
       for (const p of platforms) {
+        if (!overlaps(p, view)) continue;
         sprites.drawSprite({
           x: p.x, y: p.y, width: p.width, height: p.height,
           r: 0.3, g: 0.25, b: 0.45, a: 1,
         });
+        emitted++;
       }
-      sprites.flush(pass);
+      if (emitted > 0) sprites.flush(pass);
       continue;
     }
 
     // Blocks are square PNGs painted one per TILE_SIZE cell so the rounded
     // corners stay uniform even when platforms are wider than tall.
+    let emitted = 0;
     for (const p of platforms) {
+      if (!overlaps(p, view)) continue;
       let x = p.x;
       const end = p.x + p.width;
       while (x < end) {
@@ -224,9 +310,10 @@ export function renderStage(stage: Stage, sprites: SpriteRenderer, pass: GPURend
           r: config.worldTint.r, g: config.worldTint.g, b: config.worldTint.b, a: 1,
         });
         x += TILE_SIZE;
+        emitted++;
       }
     }
-    sprites.flushWithTexture(pass, res.bindGroup);
+    if (emitted > 0) sprites.flushWithTexture(pass, res.bindGroup);
   }
 
   // Pass 3 — grass strip over every cell belonging to a platform with
@@ -234,72 +321,68 @@ export function renderStage(stage: Stage, sprites: SpriteRenderer, pass: GPURend
   // grass it gets a grass surface even when another block is stacked right
   // above it, so a vertical stack of two grass-flagged blocks shows a grass
   // band between them as well as on the exposed top.
-  if (stage.overlays.grassOverlay) {
-    const hasGrass = stage.platforms.some((p) => p.grass);
-    if (hasGrass) {
-      const grass = stage.overlays.grassOverlay;
-      const grassCopyW = config.grass.displayH * (grass.w / grass.h);
-      const gw = Math.ceil(stage.worldWidth / TILE_SIZE);
-      const gh = Math.ceil(stage.worldHeight / TILE_SIZE);
+  if (stage.overlays.grassOverlay && derived.hasGrass) {
+    const grass = stage.overlays.grassOverlay;
+    const grassCopyW = config.grass.displayH * (grass.w / grass.h);
+    const { grassCells, gw, gh } = derived;
 
-      // Mark which cells belong to a grass-flagged platform.
-      const grassCells = new Uint8Array(gw * gh);
-      for (const p of stage.platforms) {
-        if (!p.grass) continue;
-        const cx0 = Math.floor(p.x / TILE_SIZE);
-        const cy0 = Math.floor(p.y / TILE_SIZE);
-        const cx1 = Math.ceil((p.x + p.width) / TILE_SIZE);
-        const cy1 = Math.ceil((p.y + p.height) / TILE_SIZE);
-        for (let cy = cy0; cy < cy1; cy++) {
-          if (cy < 0 || cy >= gh) continue;
-          for (let cx = cx0; cx < cx1; cx++) {
-            if (cx < 0 || cx >= gw) continue;
-            grassCells[cy * gw + cx] = 1;
-          }
-        }
-      }
+    // Only scan the cell range covered by the viewport.  The grass pass
+    // extends up by `topRise` and sideways by `overhang`, plus rows can
+    // dangle a tile below — keep a 2-tile margin so edge-of-view runs
+    // still get drawn.
+    const margin = 2 * TILE_SIZE;
+    const cxMin = Math.max(0, Math.floor((view.minX - margin) / TILE_SIZE));
+    const cxMax = Math.min(gw, Math.ceil((view.maxX + margin) / TILE_SIZE));
+    const cyMin = Math.max(0, Math.floor((view.minY - margin) / TILE_SIZE));
+    const cyMax = Math.min(gh, Math.ceil((view.maxY + margin) / TILE_SIZE));
 
-      let drew = false;
-      for (let cy = 0; cy < gh; cy++) {
-        // Row-dependent phase shift so adjacent rows don't show the same
-        // grass tufts stacked vertically. 317 is just a prime to spread the
-        // phases evenly; any co-prime works.
-        const rowPhase = ((cy * 317) % grassCopyW + grassCopyW) % grassCopyW;
-        let cx = 0;
-        while (cx < gw) {
-          if (!grassCells[cy * gw + cx]) { cx++; continue; }
-          let end = cx + 1;
-          while (end < gw && grassCells[cy * gw + end]) end++;
-          // Overhang the run on each end so grass hangs slightly past the
-          // outer edge of the run, giving platforms an organic silhouette.
-          const runX = cx * TILE_SIZE - config.grass.overhang;
-          const runEnd = end * TILE_SIZE + config.grass.overhang;
-          const topY = cy * TILE_SIZE - config.grass.topRise;
-          // Each tiling copy spans [gx, gx + grassCopyW] in world space with
-          // UV [0..1]. Clip to the run and recompute uv so the visible slice
-          // starts at the correct point in the texture.
-          let gx = runX - rowPhase;
-          while (gx < runEnd) {
-            const left = Math.max(gx, runX);
-            const right = Math.min(gx + grassCopyW, runEnd);
-            if (right > left) {
-              const drawW = right - left;
-              const uvX = (left - gx) / grassCopyW;
-              const uvW = drawW / grassCopyW;
-              sprites.drawSprite({
-                x: left, y: topY, width: drawW, height: config.grass.displayH,
-                uvX, uvY: 0, uvW, uvH: 1,
-                r: config.worldTint.r, g: config.worldTint.g, b: config.worldTint.b, a: 1,
-              });
-            }
-            gx += grassCopyW;
+    let drew = false;
+    for (let cy = cyMin; cy < cyMax; cy++) {
+      // Row-dependent phase shift so adjacent rows don't show the same
+      // grass tufts stacked vertically. 317 is just a prime to spread the
+      // phases evenly; any co-prime works.
+      const rowPhase = ((cy * 317) % grassCopyW + grassCopyW) % grassCopyW;
+      let cx = cxMin;
+      while (cx < cxMax) {
+        if (!grassCells[cy * gw + cx]) { cx++; continue; }
+        // Find the TRUE run bounds in world-space, not clipped to the
+        // viewport.  If cxMin landed mid-run, walk left to the actual
+        // start; similarly extend right beyond cxMax.  Without this, the
+        // grass tiling origin shifts with the camera and tufts shimmer
+        // as cells enter/leave view.
+        let start = cx;
+        while (start > 0 && grassCells[cy * gw + (start - 1)]) start--;
+        let end = cx + 1;
+        while (end < gw && grassCells[cy * gw + end]) end++;
+        // Overhang the run on each end so grass hangs slightly past the
+        // outer edge of the run, giving platforms an organic silhouette.
+        const runX = start * TILE_SIZE - config.grass.overhang;
+        const runEnd = end * TILE_SIZE + config.grass.overhang;
+        const topY = cy * TILE_SIZE - config.grass.topRise;
+        // Each tiling copy spans [gx, gx + grassCopyW] in world space with
+        // UV [0..1]. Clip to the run and recompute uv so the visible slice
+        // starts at the correct point in the texture.
+        let gx = runX - rowPhase;
+        while (gx < runEnd) {
+          const left = Math.max(gx, runX);
+          const right = Math.min(gx + grassCopyW, runEnd);
+          if (right > left) {
+            const drawW = right - left;
+            const uvX = (left - gx) / grassCopyW;
+            const uvW = drawW / grassCopyW;
+            sprites.drawSprite({
+              x: left, y: topY, width: drawW, height: config.grass.displayH,
+              uvX, uvY: 0, uvW, uvH: 1,
+              r: config.worldTint.r, g: config.worldTint.g, b: config.worldTint.b, a: 1,
+            });
           }
-          drew = true;
-          cx = end;
+          gx += grassCopyW;
         }
+        drew = true;
+        cx = end;
       }
-      if (drew) sprites.flushWithTexture(pass, grass.bindGroup);
     }
+    if (drew) sprites.flushWithTexture(pass, grass.bindGroup);
   }
 }
 
@@ -307,20 +390,20 @@ export function renderStage(stage: Stage, sprites: SpriteRenderer, pass: GPURend
  * Render a decoration layer. Each decoration is drawn at TILE_SIZE height with
  * natural aspect from its srcRect, anchored at bottom-center on `(d.x, d.y)`.
  */
+export type DecorationLayer = 'back' | 'front';
+
 export function renderDecorations(
   stage: Stage,
-  decorations: Decoration[],
+  layer: DecorationLayer,
   sprites: SpriteRenderer,
   pass: GPURenderPassEncoder,
+  view: ViewRect,
 ) {
-  if (decorations.length === 0) return;
-
-  const byType = new Map<string, Decoration[]>();
-  for (const d of decorations) {
-    const list = byType.get(d.type);
-    if (list) list.push(d);
-    else byType.set(d.type, [d]);
-  }
+  const derived = stage.derived ??= buildDerived(stage);
+  const byType = layer === 'back'
+    ? derived.decorationsBackByType
+    : derived.decorationsFrontByType;
+  if (byType.size === 0) return;
 
   for (const [typeId, decos] of byType) {
     const res = stage.typeResources.get(typeId);
@@ -332,14 +415,21 @@ export function renderDecorations(
     const h = res.solid ? TILE_SIZE : res.srcH;
     const w = res.solid ? TILE_SIZE * (res.srcW / res.srcH) : res.srcW;
 
+    let emitted = 0;
     for (const d of decos) {
+      // Anchor is bottom-center, so the drawn rect is [x-w/2, y-h] to [x+w/2, y].
+      const left = d.x - w / 2;
+      const top = d.y - h;
+      if (left >= view.maxX || left + w <= view.minX
+       || top >= view.maxY || top + h <= view.minY) continue;
       sprites.drawSprite({
-        x: d.x - w / 2, y: d.y - h,
+        x: left, y: top,
         width: w, height: h,
         uvX: 0, uvY: 0, uvW: 1, uvH: 1,
         r: config.worldTint.r, g: config.worldTint.g, b: config.worldTint.b, a: 1,
       });
+      emitted++;
     }
-    sprites.flushWithTexture(pass, res.bindGroup);
+    if (emitted > 0) sprites.flushWithTexture(pass, res.bindGroup);
   }
 }

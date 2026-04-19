@@ -32,6 +32,8 @@ function mount() {
   document.body.appendChild(panel);
   interceptConsole(panel.querySelector('#dev-log') as HTMLDivElement);
   installHotkey(panel);
+  startFpsMeter(panel.querySelector('#dev-fps') as HTMLSpanElement);
+  startPerfMeter(panel.querySelector('#dev-perf') as HTMLSpanElement);
 
   // Print dev-help once on startup. Goes through our intercepted console.log
   // so it also shows up inside the panel the first time someone opens it.
@@ -80,6 +82,9 @@ function injectStyles() {
     }
     #dev-panel-toggle:hover { color: #cce; }
     #dev-panel-toggle .chev { font-size: 10px; opacity: 0.7; }
+    #dev-panel-toggle .right { display: flex; align-items: center; gap: 10px; }
+    #dev-fps { color: #8ca; min-width: 52px; text-align: right; font-weight: 500; }
+    #dev-perf { color: #9ab; min-width: 130px; text-align: right; font-weight: 500; }
 
     #dev-panel-body {
       display: flex;
@@ -149,7 +154,11 @@ function renderPanel(): HTMLDivElement {
   panel.innerHTML = `
     <div id="dev-panel-toggle">
       <span>DEV</span>
-      <span class="chev">▲</span>
+      <span class="right">
+        <span id="dev-perf" title="Sprite instances / flushes last frame">— inst · — flush</span>
+        <span id="dev-fps" title="RAF frame rate — smoothed over the last 60 frames">— fps</span>
+        <span class="chev">▲</span>
+      </span>
     </div>
     <div id="dev-panel-body">
       <div id="dev-log"></div>
@@ -350,6 +359,33 @@ function parseLiteral(s: string): unknown {
   if (/^-?\d+(\.\d+)?$/.test(t)) return Number(t);
   if (/^['"].*['"]$/.test(t)) return t.slice(1, -1);
   return t;
+}
+
+function startFpsMeter(el: HTMLSpanElement) {
+  let last = performance.now();
+  const samples: number[] = [];
+  function tick() {
+    requestAnimationFrame(tick);
+    const now = performance.now();
+    const dt = now - last;
+    last = now;
+    if (dt > 0) {
+      samples.push(1000 / dt);
+      if (samples.length > 60) samples.shift();
+      const avg = samples.reduce((a, b) => a + b, 0) / samples.length;
+      el.textContent = `${avg.toFixed(0)} fps`;
+    }
+  }
+  requestAnimationFrame(tick);
+}
+
+function startPerfMeter(el: HTMLSpanElement) {
+  function tick() {
+    requestAnimationFrame(tick);
+    const perf = (window as unknown as { __perf?: { instances: number; flushes: number } }).__perf;
+    if (perf) el.textContent = `${perf.instances} inst · ${perf.flushes} flush`;
+  }
+  requestAnimationFrame(tick);
 }
 
 function installHotkey(panel: HTMLElement) {

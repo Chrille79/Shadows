@@ -2,16 +2,17 @@ import type { Renderer } from './renderer';
 import { config } from '../config';
 
 // Vertical sky gradient drawn as a fullscreen triangle.  The gradient is
-// parameterized in *world* space — as the camera moves up/down through the
-// world the visible slice shifts, so tall levels naturally show more zenith
-// color at the top without needing a taller texture.
+// parameterized in *world* space: world-y=0 gets `topColor` and world-y=groundY
+// gets `bottomColor`.  Anything below groundY is under the horizon and gets
+// covered by the hills/ground passes, so we just clamp to the bottom color
+// there rather than stretching the gradient to worldH.
 
 const WGSL = /* wgsl */`
 struct Uniforms {
   topColor: vec4f,
   bottomColor: vec4f,
   camY: f32,
-  worldH: f32,
+  groundY: f32,
   gameH: f32,
   _pad: f32,
 }
@@ -41,13 +42,16 @@ fn vs(@builtin(vertex_index) vid: u32) -> VSOut {
 @fragment
 fn fs(input: VSOut) -> @location(0) vec4f {
   let worldY = input.screenY + u.camY;
-  let t = clamp(worldY / u.worldH, 0.0, 1.0);
+  // Sky only covers y < groundY.  Below the horizon we discard so the
+  // hills / ground pass (or clear color in gaps) is what shows.
+  if (worldY >= u.groundY) { discard; }
+  let t = clamp(worldY / max(u.groundY, 1.0), 0.0, 1.0);
   return mix(u.topColor, u.bottomColor, t);
 }
 `;
 
 export interface SkyRenderer {
-  render(pass: GPURenderPassEncoder, camY: number, worldH: number): void;
+  render(pass: GPURenderPassEncoder, camY: number, groundY: number): void;
 }
 
 export function createSkyRenderer(renderer: Renderer): SkyRenderer {
@@ -81,14 +85,14 @@ export function createSkyRenderer(renderer: Renderer): SkyRenderer {
 
   const uniformData = new Float32Array(12);
 
-  function render(pass: GPURenderPassEncoder, camY: number, worldH: number) {
+  function render(pass: GPURenderPassEncoder, camY: number, groundY: number) {
     if (!config.layers.sky) return;
     const top = config.sky.top;
     const bot = config.sky.bottom;
     uniformData[0] = top.r;  uniformData[1] = top.g;  uniformData[2] = top.b;  uniformData[3] = 1;
     uniformData[4] = bot.r;  uniformData[5] = bot.g;  uniformData[6] = bot.b;  uniformData[7] = 1;
     uniformData[8] = camY;
-    uniformData[9] = worldH;
+    uniformData[9] = groundY;
     uniformData[10] = renderer.viewportH;
     uniformData[11] = 0;
     device.queue.writeBuffer(uniformBuffer, 0, uniformData);

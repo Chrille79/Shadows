@@ -183,7 +183,8 @@
       "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" \"http://localhost:5173/src/main.ts\")",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" \"http://localhost:5173/src/engine/hillsRenderer.ts\")",
       "Bash(curl -s \"http://localhost:5173/src/engine/hillsRenderer.ts\")",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(git commit *)"
     ]
   },
   "enableAllProjectMcpServers": true,

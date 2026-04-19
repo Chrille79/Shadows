@@ -154,6 +154,7 @@ export function createSpriteRenderer(renderer: Renderer): SpriteRenderer {
   let spriteCount = 0;
   let bufferOffset = 0; // running offset into instance buffer per frame
   let overflowWarnedThisFrame = false;
+  let flushesThisFrame = 0;
 
   function drawSprite(sprite: SpriteInstance) {
     if (bufferOffset + spriteCount >= MAX_SPRITES) {
@@ -199,6 +200,7 @@ export function createSpriteRenderer(renderer: Renderer): SpriteRenderer {
 
     bufferOffset += spriteCount;
     spriteCount = 0;
+    flushesThisFrame++;
   }
 
   function flush(pass: GPURenderPassEncoder) {
@@ -210,8 +212,16 @@ export function createSpriteRenderer(renderer: Renderer): SpriteRenderer {
   }
 
   function beginFrame() {
+    // Publish last frame's numbers before resetting — the dev panel reads these.
+    if (import.meta.env.DEV) {
+      const w = window as unknown as { __perf?: { instances: number; flushes: number } };
+      (w.__perf ??= { instances: 0, flushes: 0 });
+      w.__perf.instances = bufferOffset;
+      w.__perf.flushes = flushesThisFrame;
+    }
     bufferOffset = 0;
     spriteCount = 0;
+    flushesThisFrame = 0;
     overflowWarnedThisFrame = false;
   }
 

@@ -109,7 +109,9 @@ export async function initRenderer(
     passEncoder = commandEncoder.beginRenderPass({
       colorAttachments: [{
         view: textureView,
-        clearValue: { r: 0.53, g: 0.80, b: 0.95, a: 1.0 },
+        // Shown below groundY where the sky pass discards and nothing else
+        // covers — dark neutral so it reads as "underground" rather than sky.
+        clearValue: { r: 0.12, g: 0.12, b: 0.14, a: 1.0 },
         loadOp: 'clear',
         storeOp: 'store',
       }],

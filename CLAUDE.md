@@ -107,6 +107,15 @@ exposed on `window.settings` for the browser devtools console.
 plus `typeResources: Map<string, { bindGroup, srcW, srcH, solid }>` and a shared
 `overlays: { cornerFiller, grassOverlay }` resource pair.
 
+`renderStage` / `renderDecorations` also take a `ViewRect` (game passes its
+camera viewport, editor passes the whole world) and cull platforms,
+decorations, corner-fillers and grass cells to it — CPU work scales with
+visible area, not world size. Platform-derived tables (corner-filler
+positions, grass-occupancy grid, by-type grouping maps) are cached on the
+first render into `stage.derived` and reused until the Stage object is
+replaced; the editor naturally invalidates by rebuilding the Stage on each
+grid mutation.
+
 - `createStage()` loads a saved level from `localStorage['shadows:level']` via
   `loadSavedStage()`, falling back to `createDefaultStage()` (= `level_001.json`).
 - `loadStageTextures()` loads only block textures referenced by the current stage,

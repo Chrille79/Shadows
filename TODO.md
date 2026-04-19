@@ -2,6 +2,28 @@
 
 Genomgång av projektet 2026-04-14. Grupperat efter allvarlighetsgrad.
 
+## 🚀 Prestandaplan (aktivt 2026-04-19)
+
+CPU-arbete skalar idag med **världsstorlek**, inte synlig yta (se audit i samtalet). Mål: hålla 60 fps även när kartan är 2-4× större och dekorationerna fler.
+
+**Ordning:** mätning först → Tier 1 → re-mät → Tier 2 om det behövs.
+
+### Mätning
+- [x] **Räknare i dev-panel-headern**: `N inst · N flush` bredvid fps. ✅ Publicerat via `window.__perf` i `spriteRenderer.beginFrame()`, läses av panel.ts. Baseline på default-banan: **230 inst / 7 flushes**.
+
+### Tier 1 — stor vinst, liten risk
+- [x] **Viewport-culling i `renderStage()`** ([stage.ts](client/src/game/stage.ts)) — `ViewRect` skickas från `worldRenderer` via `renderer.viewportW/H + camX/camY`. Platforms, decorations, corner-fillers och grass-celler cullas. Editorn passar hela världen och drar fortfarande allt. **230 → 179 inst (-22%)** på default-banan; vinsten skalar med kart/viewport-förhållande.
+- [x] **Cache corner-filler + grass-occupancy-grid** ([stage.ts `buildDerived`](client/src/game/stage.ts)) — `Stage.derived` innehåller `fillers`, `grassCells`, `gw`, `gh`, `hasGrass` + grupperade Maps. Byggs lat vid första `renderStage`-anrop, återanvänds tills Stage byts ut (editorn bygger ny Stage per edit). Sparar 2 × `new Uint8Array(gw*gh)` och full corner-scan varje frame.
+- [x] **Ta bort per-frame `new Map()`** — `platformsByType`, `decorationsBackByType`, `decorationsFrontByType` ligger i `derived`. `renderDecorations(stage, 'back'|'front', ...)` tar layer-namn istället för decorations-array. Per-frame alloc: 0 Maps, 0 Uint8Arrays.
+
+### Tier 2 — medelstor vinst
+- [ ] **GPU-side UV-tiling för breda platformar** ([stage.ts:215](client/src/game/stage.ts:215)) — en instance per platform med `uvW = width/TILE_SIZE`, sampler `addressMode: 'repeat'`. Grass gör redan så.
+- [ ] **Texturatlas för decorations + blocks** — 1 flush per lager istället för 1 per typ. Vite-plugin eller runtime.
+
+### Tier 3 — bara om behov kvarstår
+- [ ] Chunk-baserad instance-buffer (16×16 chunks, `writeBuffer` hoppas över om oförändrat).
+- [ ] Static platform geometry i vertex buffer — byggd en gång vid level-load.
+
 ## 🔴 Kritiska buggar
 
 - [x] **`main.ts:49-50` — `loadStageTextures` och `loadCharacterTextures` awaitas inte.** ✅ Wrappade i `await Promise.all([...])` inne i try-blocket.

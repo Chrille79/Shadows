@@ -184,7 +184,6 @@ applyDisplayScale();
 
 const statusEl = document.getElementById('status')!;
 const hoverInfoEl = document.getElementById('hover-info')!;
-const fpsInfoEl = document.getElementById('fps-info')!;
 const paintBtn = document.getElementById('tool-paint')!;
 const eraseBtn = document.getElementById('tool-erase')!;
 const panBtn = document.getElementById('tool-pan')!;
@@ -411,18 +410,26 @@ function anchorYFor(gy: number) { return (gy + 1) * HALF; }
 function editorOverlays(pass: GPURenderPassEncoder, sprites: SpriteRenderer): void {
   if (!whiteBindGroup) return;
 
-  // Grid lines — 1px quads along each cell edge.
+  // Grid lines — step up by powers of 2 when zoomed out so each line lands on
+  // at least ~8 CSS-px of spacing (otherwise neighbouring 1px quads collapse
+  // onto the same screen pixel and look uneven).  Line thickness is also
+  // scaled to ~1 CSS-px so lines stay visible at any zoom.
   if (showGrid) {
     const rLine = 0.14, gLine = 0.14, bLine = 0.19, aLine = 0.33;
-    for (let c = 0; c <= COLS; c++) {
+    const minScreenPx = 8;
+    const rawStep = minScreenPx / (TILE * displayScale);
+    let step = 1;
+    while (step < rawStep) step *= 2;
+    const lineW = Math.max(1, 1 / displayScale);
+    for (let c = 0; c <= COLS; c += step) {
       sprites.drawSprite({
-        x: c * TILE, y: 0, width: 1, height: ROWS * TILE,
+        x: c * TILE, y: 0, width: lineW, height: ROWS * TILE,
         r: rLine, g: gLine, b: bLine, a: aLine,
       });
     }
-    for (let r = 0; r <= ROWS; r++) {
+    for (let r = 0; r <= ROWS; r += step) {
       sprites.drawSprite({
-        x: 0, y: r * TILE, width: COLS * TILE, height: 1,
+        x: 0, y: r * TILE, width: COLS * TILE, height: lineW,
         r: rLine, g: gLine, b: bLine, a: aLine,
       });
     }
@@ -1176,23 +1183,12 @@ function fitZoomToWrap() {
 }
 fitZoomToWrap();
 
-// Continuous RAF loop — keeps cloud drift animating and gives us an honest
-// FPS reading.  draw() is throttled via `drawnThisFrame` so the many
-// event-driven draw() calls (mouse-move, palette click, config tweaks)
-// collapse into one render per RAF tick instead of double-drawing.
-let lastFrameTime = performance.now();
-const fpsSamples: number[] = [];
+// Continuous RAF loop — keeps cloud drift animating. draw() is throttled via
+// `drawnThisFrame` so the many event-driven draw() calls (mouse-move, palette
+// click, config tweaks) collapse into one render per RAF tick instead of
+// double-drawing. The FPS counter lives in the dev-panel header (panel.ts).
 function animate() {
   requestAnimationFrame(animate);
-  const now = performance.now();
-  const dt = now - lastFrameTime;
-  lastFrameTime = now;
-  if (dt > 0) {
-    fpsSamples.push(1000 / dt);
-    if (fpsSamples.length > 60) fpsSamples.shift();
-    const avg = fpsSamples.reduce((a, b) => a + b, 0) / fpsSamples.length;
-    fpsInfoEl.textContent = `${avg.toFixed(0)} fps`;
-  }
   drawnThisFrame = false;
   draw();
 }

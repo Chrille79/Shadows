@@ -84,7 +84,7 @@ export async function createWorldRenderer(
     sprites.beginFrame();
     const pass = renderer.beginFrame();
 
-    sky.render(pass, f.camY, f.stage.worldHeight);
+    sky.render(pass, f.camY, f.stage.groundY);
     if (config.layers.hillsFar) {
       hills.render(pass, config.hills.far, f.camX, f.camY, f.stage.groundY);
     }
@@ -93,10 +93,16 @@ export async function createWorldRenderer(
     }
     parallax.render(pass, sprites, f.camX, f.camY, f.stage.groundY, f.nowMs);
 
-    renderDecorations(f.stage, f.stage.decorationsBack, sprites, pass);
-    renderStage(f.stage, sprites, pass);
+    const view = {
+      minX: f.camX,
+      minY: f.camY,
+      maxX: f.camX + renderer.viewportW,
+      maxY: f.camY + renderer.viewportH,
+    };
+    renderDecorations(f.stage, 'back', sprites, pass, view);
+    renderStage(f.stage, sprites, pass, view);
     if (f.player) renderCharacter(f.player, sprites, pass);
-    renderDecorations(f.stage, f.stage.decorationsFront, sprites, pass);
+    renderDecorations(f.stage, 'front', sprites, pass, view);
 
     f.overlays?.(pass, sprites);
 
