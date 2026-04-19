@@ -1,11 +1,8 @@
-import { initRenderer, GAME_W, GAME_H, TILE_SIZE } from './engine/renderer';
-import { createSpriteRenderer } from './engine/spriteRenderer';
-import { createSkyRenderer } from './engine/skyRenderer';
-import { createHillsRenderer } from './engine/hillsRenderer';
-import { createParallaxRenderer } from './engine/parallaxRenderer';
+import { GAME_W, GAME_H, TILE_SIZE } from './engine/renderer';
+import { createWorldRenderer } from './engine/worldRenderer';
 import { startGameLoop } from './engine/gameLoop';
-import { createStage, loadStageTextures, renderStage, renderDecorations } from './game/stage';
-import { createCharacter, updateCharacter, renderCharacter, loadCharacterTextures, PLAYER_SPRITES } from './game/character';
+import { createStage } from './game/stage';
+import { createCharacter, updateCharacter, PLAYER_SPRITES } from './game/character';
 import { PLAYER_BINDINGS, clearFrameInput, installInput, disposeInput } from './game/input';
 import { config } from './config';
 import './dev/settings'; // Exposes `window.settings` in dev — no prod cost.
@@ -24,11 +21,7 @@ async function main() {
 
   try {
     installInput();
-    const renderer = await initRenderer(canvas);
-    const sprites = createSpriteRenderer(renderer);
-    const sky = createSkyRenderer(renderer);
-    const hills = createHillsRenderer(renderer);
-    const parallax = await createParallaxRenderer(renderer, sprites);
+    const world = await createWorldRenderer({ canvas });
 
     const stage = createStage();
 
@@ -40,10 +33,7 @@ async function main() {
       PLAYER_SPRITES,
     );
 
-    await Promise.all([
-      loadStageTextures(stage, renderer.device, sprites),
-      loadCharacterTextures(player, renderer.device, sprites),
-    ]);
+    await world.loadAssets(stage, player);
 
     // Previous-tick player position for render interpolation — the fixed
     // timestep update() writes discrete positions, so at high fall velocity
@@ -102,25 +92,13 @@ async function main() {
         }
         camY = Math.min(camYMax, Math.max(0, camY));
 
-        renderer.updateProjection(camX, camY);
-        sprites.beginFrame();
-        const pass = renderer.beginFrame();
-
-        sky.render(pass, camY, stage.worldHeight);
-        if (config.layers.hillsFar) {
-          hills.render(pass, config.hills.far, camX, camY, stage.groundY);
-        }
-        if (config.layers.hillsNear) {
-          hills.render(pass, config.hills.near, camX, camY, stage.groundY);
-        }
-        parallax.render(pass, sprites, camX, camY, stage.groundY, performance.now());
-
-        renderDecorations(stage, stage.decorationsBack, sprites, pass);
-        renderStage(stage, sprites, pass);
-        renderCharacter(player, sprites, pass);
-        renderDecorations(stage, stage.decorationsFront, sprites, pass);
-
-        renderer.endFrame();
+        world.renderFrame({
+          stage,
+          player,
+          camX,
+          camY,
+          nowMs: performance.now(),
+        });
 
         player.x = savedX;
         player.y = savedY;
@@ -131,7 +109,7 @@ async function main() {
       import.meta.hot.dispose(() => {
         stopLoop();
         disposeInput();
-        renderer.dispose();
+        world.dispose();
       });
     }
   } catch (err) {

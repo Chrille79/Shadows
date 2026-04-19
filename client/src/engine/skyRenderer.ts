@@ -1,5 +1,4 @@
 import type { Renderer } from './renderer';
-import { GAME_H } from './renderer';
 import { config } from '../config';
 
 // Vertical sky gradient drawn as a fullscreen triangle.  The gradient is
@@ -90,7 +89,7 @@ export function createSkyRenderer(renderer: Renderer): SkyRenderer {
     uniformData[4] = bot.r;  uniformData[5] = bot.g;  uniformData[6] = bot.b;  uniformData[7] = 1;
     uniformData[8] = camY;
     uniformData[9] = worldH;
-    uniformData[10] = GAME_H;
+    uniformData[10] = renderer.viewportH;
     uniformData[11] = 0;
     device.queue.writeBuffer(uniformBuffer, 0, uniformData);
     pass.setPipeline(pipeline);

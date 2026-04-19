@@ -12,13 +12,34 @@ export interface Renderer {
   format: GPUTextureFormat;
   canvas: HTMLCanvasElement;
   projectionBuffer: GPUBuffer;
+  /** Viewport dimensions in world-pixels — the visible rectangle this
+   *  renderer's projection maps to clip space.  Game uses (GAME_W, GAME_H)
+   *  with a moving camera; editor uses the full world size with camera
+   *  fixed at origin. */
+  viewportW: number;
+  viewportH: number;
   beginFrame(): GPURenderPassEncoder;
   endFrame(): void;
   updateProjection(camX: number, camY: number): void;
   dispose(): void;
 }
 
-export async function initRenderer(canvas: HTMLCanvasElement): Promise<Renderer> {
+export interface InitRendererOptions {
+  /** Render resolution — also sets canvas.width/height.  Defaults to
+   *  GAME_W × GAME_H for the game viewport.  The editor passes the full
+   *  world dimensions so the whole stage is visible at camX/camY = 0. */
+  viewportW?: number;
+  viewportH?: number;
+  /** When true, scale canvas CSS to fit the window while keeping aspect
+   *  (centered, letterboxed).  The game wants this; the editor manages
+   *  its own layout and sets this to false. */
+  fitWindow?: boolean;
+}
+
+export async function initRenderer(
+  canvas: HTMLCanvasElement,
+  opts: InitRendererOptions = {},
+): Promise<Renderer> {
   if (!navigator.gpu) {
     throw new Error('WebGPU is not supported in this browser.');
   }
@@ -35,25 +56,30 @@ export async function initRenderer(canvas: HTMLCanvasElement): Promise<Renderer>
   }
   const format = navigator.gpu.getPreferredCanvasFormat();
 
-  // Fixed game resolution
-  canvas.width = GAME_W;
-  canvas.height = GAME_H;
+  const viewportW = opts.viewportW ?? GAME_W;
+  const viewportH = opts.viewportH ?? GAME_H;
+  canvas.width = viewportW;
+  canvas.height = viewportH;
 
   context.configure({ device, format, alphaMode: 'opaque' });
 
-  // Scale canvas display to fit window while maintaining aspect ratio
+  // Scale canvas display to fit window while maintaining aspect ratio.  Only
+  // the game does this; the editor manages its own CSS sizing.
+  const fitWindow = opts.fitWindow ?? true;
   function fitCanvas() {
-    const scale = Math.min(window.innerWidth / GAME_W, window.innerHeight / GAME_H);
-    canvas.style.width = `${GAME_W * scale}px`;
-    canvas.style.height = `${GAME_H * scale}px`;
+    const scale = Math.min(window.innerWidth / viewportW, window.innerHeight / viewportH);
+    canvas.style.width = `${viewportW * scale}px`;
+    canvas.style.height = `${viewportH * scale}px`;
     canvas.style.margin = 'auto';
     canvas.style.position = 'absolute';
     canvas.style.top = '50%';
     canvas.style.left = '50%';
     canvas.style.transform = 'translate(-50%, -50%)';
   }
-  fitCanvas();
-  window.addEventListener('resize', fitCanvas);
+  if (fitWindow) {
+    fitCanvas();
+    window.addEventListener('resize', fitCanvas);
+  }
 
   // Orthographic projection uniform buffer (mat4x4f = 64 bytes)
   const projectionBuffer = device.createBuffer({
@@ -65,13 +91,13 @@ export async function initRenderer(canvas: HTMLCanvasElement): Promise<Renderer>
   let passEncoder: GPURenderPassEncoder;
 
   function updateProjection(camX: number, camY: number) {
-    // Orthographic projection with camera offset
-    // Maps (camX, camY)-(camX+GAME_W, camY+GAME_H) to clip space, Y-down
+    // Orthographic projection with camera offset.
+    // Maps (camX, camY)-(camX+viewportW, camY+viewportH) to clip space, Y-down.
     const proj = new Float32Array([
-      2 / GAME_W, 0, 0, 0,
-      0, -2 / GAME_H, 0, 0,
+      2 / viewportW, 0, 0, 0,
+      0, -2 / viewportH, 0, 0,
       0, 0, 1, 0,
-      -2 * camX / GAME_W - 1, 2 * camY / GAME_H + 1, 0, 1,
+      -2 * camX / viewportW - 1, 2 * camY / viewportH + 1, 0, 1,
     ]);
     device.queue.writeBuffer(projectionBuffer, 0, proj);
   }
@@ -104,7 +130,7 @@ export async function initRenderer(canvas: HTMLCanvasElement): Promise<Renderer>
   function dispose() {
     if (disposed) return;
     disposed = true;
-    window.removeEventListener('resize', fitCanvas);
+    if (fitWindow) window.removeEventListener('resize', fitCanvas);
     projectionBuffer.destroy();
     // Note: GPUDevice is not explicitly destroyed — handled by GC when nothing references it.
   }
@@ -115,6 +141,8 @@ export async function initRenderer(canvas: HTMLCanvasElement): Promise<Renderer>
     format,
     canvas,
     projectionBuffer,
+    viewportW,
+    viewportH,
     beginFrame,
     endFrame,
     updateProjection,

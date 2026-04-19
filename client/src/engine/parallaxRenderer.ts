@@ -1,5 +1,4 @@
 import type { Renderer } from './renderer';
-import { GAME_W } from './renderer';
 import type { SpriteRenderer } from './spriteRenderer';
 import { loadTextureBitmap } from './textureLoader';
 import { config } from '../config';
@@ -107,7 +106,7 @@ export async function createParallaxRenderer(
     for (const c of clouds) {
       const cloudW = c.srcW * c.scale;
       const cloudH = c.srcH * c.scale;
-      const period = GAME_W + cloudW;
+      const period = renderer.viewportW + cloudW;
       let screenX = c.baseX + c.driftSpeed * t - camX * c.parallax;
       screenX = ((screenX % period) + period) % period - cloudW;
       const worldX = camX + screenX;

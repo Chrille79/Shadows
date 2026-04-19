@@ -1,5 +1,4 @@
 import type { Renderer } from './renderer';
-import { GAME_W, GAME_H } from './renderer';
 import type { HillWaveConfig } from '../config';
 
 // Procedural sine-wave hill band drawn as a fullscreen triangle.  The shader
@@ -118,8 +117,8 @@ export function createHillsRenderer(renderer: Renderer): HillsRenderer {
     buf[2] = layer.color.b; buf[3] = layer.color.a;
     buf[4] = camX;
     buf[5] = camY;
-    buf[6] = GAME_W;
-    buf[7] = GAME_H;
+    buf[6] = renderer.viewportW;
+    buf[7] = renderer.viewportH;
     buf[8] = groundY;
     buf[9] = layer.amplitude;
     buf[10] = layer.baseOffset;
