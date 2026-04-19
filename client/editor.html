@@ -72,11 +72,12 @@
     }
     .layer-btn:hover { background: #34344a; }
     .layer-btn.active { background: #5a7dd4; border-color: #7a9de4; color: #fff; }
-    #hover-info {
-      margin-left: auto; color: #bbb; font-size: 12px;
+    #hover-info, #fps-info {
+      color: #bbb; font-size: 12px;
       font-family: ui-monospace, Consolas, monospace;
       padding-right: 10px; white-space: nowrap;
     }
+    #fps-info { margin-left: auto; min-width: 66px; text-align: right; color: #8ca; }
 
     /* --- Palette + canvas --- */
     #palette {
@@ -231,6 +232,7 @@
       <!-- play triangle -->
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
     </button>
+    <div id="fps-info" title="RAF frame rate — smoothed over the last 60 frames">— fps</div>
     <div id="hover-info">—</div>
   </div>
 

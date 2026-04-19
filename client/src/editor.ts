@@ -139,15 +139,29 @@ async function initBgWorld() {
 }
 void initBgWorld();
 
+// Cached Stage rebuilt only when the authored grid[] / decoration layers /
+// groundY change — serializing + parsing 1800+ cells every RAF tick was
+// burning ~half the frame budget even when nothing was being painted.
+let cachedEditorStage: Stage | null = null;
+let editorStageDirty = true;
+
+function invalidateEditorStage() {
+  editorStageDirty = true;
+}
+
 function buildEditorStage(): Stage {
-  // Serialize the authored grid[] arrays to a LevelFile, then rebuild a Stage
-  // via the same parser the game uses.  Reuse the preloaded textures so
-  // renderStage + renderDecorations draw actual tiles/grass/decorations
-  // without uploading anything new each frame.
+  if (cachedEditorStage && !editorStageDirty) {
+    // groundY is the only thing that can change without a mutation (via the
+    // dev console or the horizon dialog), so keep it in sync on every read.
+    cachedEditorStage.groundY = groundY;
+    return cachedEditorStage;
+  }
   const data = serializeLevel();
   const stage = stageFromFile(data);
   if (preloadedTypes) stage.typeResources = preloadedTypes;
   if (preloadedOverlays) stage.overlays = preloadedOverlays;
+  cachedEditorStage = stage;
+  editorStageDirty = false;
   return stage;
 }
 
@@ -163,6 +177,7 @@ applyDisplayScale();
 
 const statusEl = document.getElementById('status')!;
 const hoverInfoEl = document.getElementById('hover-info')!;
+const fpsInfoEl = document.getElementById('fps-info')!;
 const paintBtn = document.getElementById('tool-paint')!;
 const eraseBtn = document.getElementById('tool-erase')!;
 const panBtn = document.getElementById('tool-pan')!;
@@ -346,6 +361,7 @@ function setTile(cx: number, cy: number, typeIdx: number) {
     grid[i] = typeIdx + 1;
     grassGrid[i] = grassPaint ? 1 : 0;
   }
+  invalidateEditorStage();
 }
 function getTile(cx: number, cy: number): number {
   return grid[cellIndex(cx, cy)]; // 0 = empty, else index+1
@@ -363,6 +379,7 @@ function decoIndex(gx: number, gy: number) {
 function setDeco(layer: Uint8Array, gx: number, gy: number, typeIdx: number) {
   if (gx < 0 || gy < 0 || gx >= DECO_COLS || gy >= DECO_ROWS) return;
   layer[decoIndex(gx, gy)] = typeIdx < 0 ? 0 : typeIdx + 1;
+  invalidateEditorStage();
 }
 function getDeco(layer: Uint8Array, gx: number, gy: number): number {
   return layer[decoIndex(gx, gy)];
@@ -476,7 +493,14 @@ function editorOverlays(pass: GPURenderPassEncoder, sprites: SpriteRenderer): vo
   }
 }
 
+// Set by every event-triggered draw(); cleared at the top of each RAF tick.
+// Collapses multiple mouse/config-change draw() calls within one frame into
+// a single actual render.
+let drawnThisFrame = false;
+
 function draw() {
+  if (drawnThisFrame) return;
+  drawnThisFrame = true;
   if (!bgWorld) return;
   const stage = buildEditorStage();
   const saved = { ...config.layers };
@@ -545,6 +569,7 @@ function countOutside(nc: number, nr: number): number {
 // fits. Cells outside the new bounds are dropped. All mutations in one place
 // so callers only need to call this once.
 function resizeWorld(newCols: number, newRows: number) {
+  invalidateEditorStage();
   const oldGrid = grid, oldGrass = grassGrid, oldBack = gridBack, oldFront = gridFront;
   const oldCols = COLS, oldRows = ROWS;
   const oldDCols = DECO_COLS;
@@ -921,6 +946,7 @@ document.getElementById('btn-clear')!.addEventListener('click', async () => {
   if (!(await askConfirm(`Clear ${label} on this layer?`, 'Clear layer'))) return;
   if (activeLayer === 'solid') { grid.fill(0); grassGrid.fill(0); }
   else activeDecoGrid()!.fill(0);
+  invalidateEditorStage();
   draw();
 });
 
@@ -1015,6 +1041,7 @@ function serializeDeco(layer: Uint8Array): LevelDecoration[] {
 }
 
 function loadLevel(data: LevelFile) {
+  invalidateEditorStage();
   if (!data) {
     grid.fill(0);
     grassGrid.fill(0);
@@ -1141,3 +1168,25 @@ function fitZoomToWrap() {
   wrap.scrollTop = 0;
 }
 fitZoomToWrap();
+
+// Continuous RAF loop — keeps cloud drift animating and gives us an honest
+// FPS reading.  draw() is throttled via `drawnThisFrame` so the many
+// event-driven draw() calls (mouse-move, palette click, config tweaks)
+// collapse into one render per RAF tick instead of double-drawing.
+let lastFrameTime = performance.now();
+const fpsSamples: number[] = [];
+function animate() {
+  requestAnimationFrame(animate);
+  const now = performance.now();
+  const dt = now - lastFrameTime;
+  lastFrameTime = now;
+  if (dt > 0) {
+    fpsSamples.push(1000 / dt);
+    if (fpsSamples.length > 60) fpsSamples.shift();
+    const avg = fpsSamples.reduce((a, b) => a + b, 0) / fpsSamples.length;
+    fpsInfoEl.textContent = `${avg.toFixed(0)} fps`;
+  }
+  drawnThisFrame = false;
+  draw();
+}
+animate();
