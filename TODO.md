@@ -56,6 +56,39 @@ Genomgång av projektet 2026-04-14. Grupperat efter allvarlighetsgrad.
 - [ ] `Shadows.Server/Program.cs` är placeholder (WebSocket-eko). Med ren plattformare finns inget hårt krav på server i nuläget — behövs bara om vi vill ha nivå-delning, leaderboards, konton eller level-browser.
 - [ ] Ingen persistens (nivåer, konton, stats). EF Core + SQLite om/när det behövs.
 
+## ✏️ Editor
+
+- [ ] Ersätt `alert()` (Format-felet i `btn-world-size`) med in-page dialog —
+      samma iframe-blocker som prompt/confirm.
+- [ ] Grass-indicator syns dåligt när man har grass på alla 4 celler i en
+      stack. Visa tydlig strecka/label per cell så flagade celler inuti en
+      stapel också syns.
+- [ ] Mouse-wheel-zoom utan Ctrl (pan via drag eller Shift+wheel istället).
+- [ ] Export/import av decoration-sprites (palette i back/front-layer).
+- [ ] Mario-style bakgrunder (sky + moln + berg). Parallax är borttaget —
+      just nu bara flat clear color.
+- [ ] Gräs ska kunna avsluta vänster/höger så det hänger över cellen när
+      granncellen är tom (snyggt kantavslut istället för rak 90°-klippning).
+- [ ] Non-grass blocks som väggar: collision från sidorna men inte uppifrån.
+      Per platform-val — designer ska välja vilka som är väggar vs rent
+      dekorativa.
+
+## 🖌️ Renderer / infra
+
+- [ ] WebGPU pre-existing `tsc` null-warnings (`ctx`, `context`) — låg prio
+      men borde fixas så typecheck är ren.
+- [ ] Sprite budget-tracking i editorn räknar inte mot aktuella render-passen
+      — ta bort eller uppdatera till faktisk budget.
+- [ ] Tilemap-rendering istället för en sprite per tile — en enda mesh/draw
+      call för en hel region bör vara snabbare än dagens per-cell `drawSprite`.
+- [ ] Sprites för dekoration — fyll `client/src/assets/sprites/` med
+      träd/stenar/buskar i Mario-stil.
+- [ ] Ny karaktär-sprite som matchar Mario-Odyssey-stilen. Nuvarande
+      ninja-spritesheet är gammal painterly-stil och krockar med de
+      plast-renderade blocken. Blender-render (samma cam/ljus-pipeline
+      som `3d-assets/cube/`) med minst `idle`, `run`, `jump` är enklaste
+      vägen till konsekvens.
+
 ## ✅ Det som är bra (behåll)
 
 - Sprite-batchern med `bufferOffset` över flera flushes fungerar korrekt.

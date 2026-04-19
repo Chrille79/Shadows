@@ -1,9 +1,10 @@
 export const GAME_W = 1920;
 export const GAME_H = 1080;
-// World is a grid of 132×132 tiles. 58×44 = 7656×5808, rounded to even tile counts.
-export const TILE_SIZE = 132;
-export const WORLD_W = TILE_SIZE * 58; // 7656 — wide world, horizontal scrolling
-export const WORLD_H = TILE_SIZE * 44; // 5808 — 44 tiles tall
+// World is a grid of 128×128 tiles (power of two — GPU-friendly for mipmaps
+// and block-compressed textures). 60×30 = 7680×3840.
+export const TILE_SIZE = 128;
+export const WORLD_W = TILE_SIZE * 60; // 7680 — wide world, horizontal scrolling
+export const WORLD_H = TILE_SIZE * 30; // 3840 — 30 tiles tall
 
 export interface Renderer {
   device: GPUDevice;
@@ -82,7 +83,7 @@ export async function initRenderer(canvas: HTMLCanvasElement): Promise<Renderer>
     passEncoder = commandEncoder.beginRenderPass({
       colorAttachments: [{
         view: textureView,
-        clearValue: { r: 0.05, g: 0.05, b: 0.12, a: 1.0 },
+        clearValue: { r: 0.53, g: 0.80, b: 0.95, a: 1.0 },
         loadOp: 'clear',
         storeOp: 'store',
       }],

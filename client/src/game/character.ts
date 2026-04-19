@@ -1,5 +1,6 @@
 import type { SpriteRenderer } from '../engine/spriteRenderer';
 import type { Platform } from './stage';
+import { config } from '../config';
 import type { AnimationPlayer } from '../engine/animation';
 import { createAnimation, createAnimationPlayer } from '../engine/animation';
 import type { AtlasData } from '../engine/animation';
@@ -46,12 +47,8 @@ export interface Character {
   spriteSet: SpriteSet;
 }
 
-const GRAVITY = 1800;
-const MOVE_SPEED = 400;
-// Peak jump height = v² / (2g). Targeting 1.5 tiles (198 px) clears one tile
-// comfortably: sqrt(2 * 1800 * 198) ≈ 844 → round up for a little margin.
-const JUMP_FORCE = -845;
-const FRICTION = 0.85;
+// Physics constants come from `config.physics` — see config.ts. Read from
+// the live object at every use so the dev console can tune them.
 
 export function createCharacter(x: number, y: number, bindings: InputBindings, spriteSet: SpriteSet): Character {
   const animPlayer = createAnimationPlayer({
@@ -102,50 +99,57 @@ interface CharacterInternal extends Character {
   _bindGroups?: Record<string, GPUBindGroup>;
 }
 
-export function updateCharacter(char: Character, dt: number, platforms: Platform[]) {
+export function updateCharacter(char: Character, dt: number, platforms: Platform[], worldHeight: number) {
   const b = char.bindings;
 
   // Movement
   const moving = isHeld(b, 'left') || isHeld(b, 'right');
 
   if (isHeld(b, 'left')) {
-    char.velX = -MOVE_SPEED;
+    char.velX = -config.physics.moveSpeed;
     char.facing = -1;
   } else if (isHeld(b, 'right')) {
-    char.velX = MOVE_SPEED;
+    char.velX = config.physics.moveSpeed;
     char.facing = 1;
   } else {
-    char.velX *= FRICTION;
+    char.velX *= config.physics.friction;
   }
 
   // Jump
   if (wasPressed(b, 'jump') && char.grounded) {
-    char.velY = JUMP_FORCE;
+    char.velY = config.physics.jumpForce;
     char.grounded = false;
   }
 
-  // Apply gravity
-  char.velY += GRAVITY * dt;
+  // Apply gravity, capped at terminal velocity.
+  char.velY = Math.min(config.physics.terminalVelocity,
+                       char.velY + config.physics.gravity * dt);
 
   // Move
   char.x += char.velX * dt;
   char.y += char.velY * dt;
 
-  // Platform collision — only land from above
+  // Platform collision — only grass-flagged platforms are standable. Blocks
+  // without grass are pure decoration and the player passes straight through
+  // them. The collision top is lifted by config.grass.topRise so the player's feet
+  // land on the grass surface rather than inside it.
   const prevBottom = char.y + char.height - char.velY * dt;
   char.grounded = false;
   for (const p of platforms) {
+    if (!p.grass) continue;
+    const ptop = p.y - config.grass.topRise;
+    const pHeight = p.height + config.grass.topRise;
     const charBottom = char.y + char.height;
-    const wasAbove = prevBottom <= p.y + 4;
+    const wasAbove = prevBottom <= ptop + 4;
     if (
       char.velY >= 0 &&
       wasAbove &&
       char.x + char.width > p.x &&
       char.x < p.x + p.width &&
-      charBottom >= p.y &&
-      charBottom <= p.y + p.height + char.velY * dt + 4
+      charBottom >= ptop &&
+      charBottom <= ptop + pHeight + char.velY * dt + 4
     ) {
-      char.y = p.y - char.height;
+      char.y = ptop - char.height;
       char.velY = 0;
       char.grounded = true;
     }
@@ -168,8 +172,8 @@ export function updateCharacter(char: Character, dt: number, platforms: Platform
     char.textureBindGroup = ci._bindGroups[char.animPlayer.currentAnim] ?? char.textureBindGroup;
   }
 
-  // Fall off screen - respawn
-  if (char.y > 3000) {
+  // Fell through the bottom of the world → respawn at the top.
+  if (char.y > worldHeight) {
     char.x = 200;
     char.y = 100;
     char.velX = 0;

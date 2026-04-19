@@ -1,0 +1,21 @@
+{
+  "physics": {
+    "gravity": 1800,
+    "moveSpeed": 400,
+    "jumpForce": -845,
+    "friction": 0.85,
+    "terminalVelocity": 1400
+  },
+  "camera": {
+    "yLerpDown": 0.16,
+    "yLerpUp": 0.02,
+    "yDeadzoneUpTiles": 4,
+    "yDeadzoneDownTiles": 1
+  },
+  "grass": {
+    "topRise": 4,
+    "displayH": 64,
+    "overhang": 8
+  },
+  "worldTint": { "r": 1, "g": 1, "b": 1 }
+}

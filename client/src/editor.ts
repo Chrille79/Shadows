@@ -1,10 +1,13 @@
 // Standalone 2D canvas level editor for Shadows.
 // Paints a tile grid; saves/loads level data compatible with game/stage.ts.
 
-import { WORLD_W, WORLD_H, TILE_SIZE, GAME_H } from './engine/renderer';
+import { WORLD_W, WORLD_H, TILE_SIZE } from './engine/renderer';
 import { TILE_TYPES, DECORATION_TYPES, ALL_TYPES, DEFAULT_TILE_ID, getTileType } from './game/tileTypes';
-import { BIG_CLOUDS, SMALL_CLOUDS, cloudCount, generateCloudInstances, type CloudInstance } from './game/clouds';
+import { config } from './config';
+import grassOverlayUrl from './assets/overlays/grass_overlay_bright.png?url';
 import level001 from './levels/level_001.json';
+import './dev/settings'; // window.settings helpers — dev only.
+import './dev/panel';    // In-page dev panel (backtick to toggle) — dev only.
 
 const TILE = TILE_SIZE;
 const HALF = TILE / 2;
@@ -23,16 +26,11 @@ let DECO_ROWS = ROWS * 2;
 export const LEVEL_STORAGE_KEY = 'shadows:level';
 export const LEVEL_VERSION = 3;
 
-// Per-frame sprite ceiling in the renderer (MAX_SPRITES in spriteRenderer.ts).
-// Parallax + player overhead: 1 (sky) + 2×4 (trees, worst-case tile count over
-// GAME_W) + 1 (player) = ~10 fixed, plus a dynamic cloud count that scales
-// with world width. For WORLD_W = 7656 this returns ~4073 (≈ the 4070 we used
-// as a static value before).
-const SPRITE_OVERHEAD_FIXED = 10;
+// Per-frame sprite ceiling in the renderer (MAX_SPRITES in spriteRenderer.ts),
+// reserving a small overhead for the player and any future HUD sprites.
+const SPRITE_OVERHEAD_FIXED = 8;
 function spriteBudget(): number {
-  return 4096 - SPRITE_OVERHEAD_FIXED
-       - cloudCount(BIG_CLOUDS, worldW)
-       - cloudCount(SMALL_CLOUDS, worldW);
+  return 4096 - SPRITE_OVERHEAD_FIXED;
 }
 
 interface LevelPlatform {
@@ -41,6 +39,7 @@ interface LevelPlatform {
   width: number;
   height: number;
   type: string;
+  grass?: boolean;
 }
 
 interface LevelDecoration {
@@ -61,9 +60,15 @@ interface LevelFile {
 
 // Solid grid cells store the TILE_TYPES index + 1 (0 = empty).
 let grid: Uint8Array = new Uint8Array(COLS * ROWS);
+// Per-solid-cell grass flag. 1 = grass on this cell, 0 = off. Parallel to `grid`.
+let grassGrid: Uint8Array = new Uint8Array(COLS * ROWS);
 // Decoration grids — same encoding as `grid` but at half-tile resolution.
 let gridBack: Uint8Array = new Uint8Array(DECO_COLS * DECO_ROWS);
 let gridFront: Uint8Array = new Uint8Array(DECO_COLS * DECO_ROWS);
+
+// When true, painting solid tiles also sets the grass flag on those cells.
+// Toggle with the toolbar button or the G key.
+let grassPaint = false;
 
 type ActiveLayer = 'solid' | 'back' | 'front';
 let activeLayer: ActiveLayer = 'solid';
@@ -120,85 +125,18 @@ const tileImages: HTMLImageElement[] = ALL_TYPES.map((t) => {
   return img;
 });
 
-// --- Parallax preview layers ---
-// Match the game's parallax setup (see main.ts). In the editor we tile these
-// across the world so the level designer can see context behind the tiles.
-// Since the editor shows the full world at once (no camera), each layer is
-// just tiled horizontally at a chosen Y in world coords.
-interface BgImage { img: HTMLImageElement; y: number; displayH: number; bottomY?: number; stretchWorldW?: boolean; scatter?: CloudInstance[]; }
-function loadBg(url: string, opts: { y?: number; displayH?: number; bottomY?: number; stretchWorldW?: boolean; scatter?: CloudInstance[] }): BgImage {
-  const img = new Image();
-  img.src = url;
-  img.onload = () => draw();
-  return {
-    img,
-    y: opts.y ?? 0,
-    displayH: opts.displayH ?? GAME_H,
-    bottomY: opts.bottomY,
-    stretchWorldW: opts.stretchWorldW,
-    scatter: opts.scatter,
-  };
-}
-// Sky and trees both terminate at tile row 22 (y = 2904): sky fills above it,
-// tree bottoms sit on it, so the horizon line is consistent across layers.
-const SKY_BOTTOM = 22 * TILE_SIZE;
-const BG_LAYERS = {
-  sky:    loadBg(new URL('./assets/backgrounds/sky.png',          import.meta.url).href,
-                 { y: 0, displayH: SKY_BOTTOM, stretchWorldW: true }),
-  clouds: [
-    loadBg(new URL('./assets/backgrounds/cloude_big.png',   import.meta.url).href,
-           { displayH: 260, scatter: generateCloudInstances(BIG_CLOUDS, worldW) }),
-    loadBg(new URL('./assets/backgrounds/cloude_small.png', import.meta.url).href,
-           { displayH: 180, scatter: generateCloudInstances(SMALL_CLOUDS, worldW) }),
-  ],
-  trees: [
-    loadBg(new URL('./assets/backgrounds/back_trees1.png', import.meta.url).href,
-           { displayH: GAME_H, bottomY: SKY_BOTTOM }),
-    loadBg(new URL('./assets/backgrounds/back_trees2.png', import.meta.url).href,
-           { displayH: GAME_H, bottomY: SKY_BOTTOM }),
-  ],
-};
-
-type LayerKey = 'sky' | 'clouds' | 'trees';
-const LAYER_VIS_KEY = 'shadows:editorLayers';
-const layerVisibility: Record<LayerKey, boolean> = { sky: true, clouds: true, trees: true };
-try {
-  const raw = localStorage.getItem(LAYER_VIS_KEY);
-  if (raw) Object.assign(layerVisibility, JSON.parse(raw));
-} catch { /* ignore */ }
-function saveLayerVisibility() {
-  localStorage.setItem(LAYER_VIS_KEY, JSON.stringify(layerVisibility));
-}
-
-function drawBgImage(b: BgImage) {
-  const { img } = b;
-  if (!img.complete || img.naturalWidth === 0) return;
-  const y = b.bottomY !== undefined ? b.bottomY - b.displayH : b.y;
-  if (b.stretchWorldW) {
-    // Sky (1px wide) stretched to the full world width in a single draw
-    // instead of thousands of tiny tiles.
-    ctx.drawImage(img, 0, y, worldW, b.displayH);
-    return;
-  }
-  const dispW = img.naturalWidth * (b.displayH / img.naturalHeight);
-  if (b.scatter) {
-    // Scattered clouds: fixed world positions, not tiled. Editor has no camera
-    // so each instance is drawn at its base (x, y) directly.
-    for (const inst of b.scatter) {
-      ctx.drawImage(img, inst.x, inst.y, dispW, b.displayH);
-    }
-    return;
-  }
-  for (let x = 0; x < worldW; x += dispW) {
-    ctx.drawImage(img, x, y, dispW, b.displayH);
-  }
-}
+// Grass overlay texture — matches the in-game grass render so the editor
+// preview looks the same as what the player sees.
+const grassOverlayImg = new Image();
+grassOverlayImg.src = grassOverlayUrl;
+grassOverlayImg.onload = () => draw();
+// Grass rendering values come from the shared `config.grass` — same as the
+// in-game grass pass in stage.ts — so the editor preview stays in sync when
+// designers tweak via the dev console.
 
 // Return source rect for a tile type (defaults to entire image once loaded).
 function srcRectFor(typeIdx: number) {
-  const t = ALL_TYPES[typeIdx];
   const img = tileImages[typeIdx];
-  if (t?.srcRect) return t.srcRect;
   const w = img?.naturalWidth || 1, h = img?.naturalHeight || 1;
   return { x: 0, y: 0, w, h };
 }
@@ -326,8 +264,15 @@ function cellIndex(cx: number, cy: number) {
 }
 function setTile(cx: number, cy: number, typeIdx: number) {
   if (cx < 0 || cy < 0 || cx >= COLS || cy >= ROWS) return;
+  const i = cellIndex(cx, cy);
   // 0 = empty; otherwise store (typeIdx + 1)
-  grid[cellIndex(cx, cy)] = typeIdx < 0 ? 0 : typeIdx + 1;
+  if (typeIdx < 0) {
+    grid[i] = 0;
+    grassGrid[i] = 0;
+  } else {
+    grid[i] = typeIdx + 1;
+    grassGrid[i] = grassPaint ? 1 : 0;
+  }
 }
 function getTile(cx: number, cy: number): number {
   return grid[cellIndex(cx, cy)]; // 0 = empty, else index+1
@@ -361,14 +306,10 @@ function anchorXFor(gx: number) { return (gx + 0.5) * HALF; }
 function anchorYFor(gy: number) { return (gy + 1) * HALF; }
 
 function draw() {
-  ctx.fillStyle = '#16161f';
+  // Match the game's sky clear color so the editor canvas previews the
+  // eventual in-game background.
+  ctx.fillStyle = '#87cdf2';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-  // Parallax preview — drawn in back-to-front order. Sky first (so it covers
-  // the dark fill), then clouds, then trees. All are tileable.
-  if (layerVisibility.sky)    drawBgImage(BG_LAYERS.sky);
-  if (layerVisibility.clouds) for (const c of BG_LAYERS.clouds) drawBgImage(c);
-  if (layerVisibility.trees)  for (const t of BG_LAYERS.trees)  drawBgImage(t);
 
   // Grid lines
   ctx.strokeStyle = '#24243055';
@@ -412,6 +353,42 @@ function draw() {
       }
       ctx.strokeStyle = '#00000033';
       ctx.strokeRect(px + 0.5, py + 0.5, TILE - 1, TILE - 1);
+    }
+  }
+
+  // Grass overlays — rendered with the real grass PNG so the editor preview
+  // matches the in-game render. Contiguous grass-flagged cells on the same
+  // row are tiled under a single run for a seamless strip (same as the
+  // runtime grass pass in stage.ts).
+  if (grassOverlayImg.complete && grassOverlayImg.naturalWidth > 0) {
+    const gImg = grassOverlayImg;
+    const copyW = config.grass.displayH * (gImg.naturalWidth / gImg.naturalHeight);
+    for (let cy = 0; cy < ROWS; cy++) {
+      const rowPhase = ((cy * 317) % copyW + copyW) % copyW;
+      let cx = 0;
+      while (cx < COLS) {
+        if (!grassGrid[cellIndex(cx, cy)]) { cx++; continue; }
+        let end = cx + 1;
+        while (end < COLS && grassGrid[cellIndex(end, cy)]) end++;
+        const runX = cx * TILE - config.grass.overhang;
+        const runEnd = end * TILE + config.grass.overhang;
+        const topY = cy * TILE - config.grass.topRise;
+        let gx = runX - rowPhase;
+        while (gx < runEnd) {
+          const left = Math.max(gx, runX);
+          const right = Math.min(gx + copyW, runEnd);
+          if (right > left) {
+            const drawW = right - left;
+            const srcX = ((left - gx) / copyW) * gImg.naturalWidth;
+            const srcW = (drawW / copyW) * gImg.naturalWidth;
+            ctx.drawImage(gImg,
+              srcX, 0, srcW, gImg.naturalHeight,
+              left, topY, drawW, config.grass.displayH);
+          }
+          gx += copyW;
+        }
+        cx = end;
+      }
     }
   }
 
@@ -534,11 +511,10 @@ function countOutside(nc: number, nr: number): number {
 }
 
 // Reallocate all grids to a new world size, preserving as much content as
-// fits. Cells outside the new bounds are dropped. Canvas, cloud scatter, and
-// zoom are updated to match. All mutations in one place so callers only need
-// to call this once.
+// fits. Cells outside the new bounds are dropped. All mutations in one place
+// so callers only need to call this once.
 function resizeWorld(newCols: number, newRows: number) {
-  const oldGrid = grid, oldBack = gridBack, oldFront = gridFront;
+  const oldGrid = grid, oldGrass = grassGrid, oldBack = gridBack, oldFront = gridFront;
   const oldCols = COLS, oldRows = ROWS;
   const oldDCols = DECO_COLS;
 
@@ -550,6 +526,7 @@ function resizeWorld(newCols: number, newRows: number) {
   DECO_ROWS = newRows * 2;
 
   grid = new Uint8Array(COLS * ROWS);
+  grassGrid = new Uint8Array(COLS * ROWS);
   gridBack = new Uint8Array(DECO_COLS * DECO_ROWS);
   gridFront = new Uint8Array(DECO_COLS * DECO_ROWS);
 
@@ -558,6 +535,7 @@ function resizeWorld(newCols: number, newRows: number) {
   for (let cy = 0; cy < copyRows; cy++) {
     for (let cx = 0; cx < copyCols; cx++) {
       grid[cy * COLS + cx] = oldGrid[cy * oldCols + cx];
+      grassGrid[cy * COLS + cx] = oldGrass[cy * oldCols + cx];
     }
   }
   const copyDCols = copyCols * 2, copyDRows = copyRows * 2;
@@ -570,11 +548,6 @@ function resizeWorld(newCols: number, newRows: number) {
 
   canvas.width = worldW;
   canvas.height = worldH;
-
-  // Regenerate cloud scatter so clouds spread over the new width instead of
-  // bunching up on the left (or leaving an empty band on a wider world).
-  BG_LAYERS.clouds[0].scatter = generateCloudInstances(BIG_CLOUDS, worldW);
-  BG_LAYERS.clouds[1].scatter = generateCloudInstances(SMALL_CLOUDS, worldW);
 
   fitZoomToWrap();
   draw();
@@ -750,17 +723,108 @@ layerBtns.solid.addEventListener('click', () => setActiveLayer('solid'));
 layerBtns.back.addEventListener('click',  () => setActiveLayer('back'));
 layerBtns.front.addEventListener('click', () => setActiveLayer('front'));
 
-// Minimum world size. Below these the game breaks:
+// --- Grass toggle ---
+const grassBtn = document.getElementById('tool-grass')!;
+function updateGrassBtn() {
+  grassBtn.classList.toggle('active', grassPaint);
+}
+function setGrassPaint(next: boolean) {
+  grassPaint = next;
+  updateGrassBtn();
+}
+grassBtn.addEventListener('click', () => setGrassPaint(!grassPaint));
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'g' || e.key === 'G') {
+    // Ignore when the focus is a text input so the letter still types.
+    const t = e.target as HTMLElement | null;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+    setGrassPaint(!grassPaint);
+  }
+});
+
+// --- Dialog helpers ---
+// `prompt()` and `confirm()` are blocked by Chrome inside cross-origin iframes
+// (the Claude preview runs the editor that way), so we ship in-page dialogs
+// that work everywhere.
+const promptDialog = document.getElementById('prompt-dialog') as HTMLDialogElement;
+const promptTitle = document.getElementById('prompt-title')!;
+const promptMessage = document.getElementById('prompt-message')!;
+const promptInput = document.getElementById('prompt-input') as HTMLInputElement;
+const promptCancel = document.getElementById('prompt-cancel')!;
+
+function askText(message: string, initial: string, title = 'Input'): Promise<string | null> {
+  return new Promise((resolve) => {
+    promptTitle.textContent = title;
+    promptMessage.textContent = message;
+    promptInput.value = initial;
+    let resolved = false;
+    const finish = (value: string | null) => {
+      if (resolved) return;
+      resolved = true;
+      promptDialog.close();
+      cleanup();
+      resolve(value);
+    };
+    const onCancel = () => finish(null);
+    const onSubmit = (e: Event) => { e.preventDefault(); finish(promptInput.value); };
+    const onEsc = () => finish(null);
+    function cleanup() {
+      promptCancel.removeEventListener('click', onCancel);
+      promptDialog.removeEventListener('cancel', onEsc);
+      promptDialog.querySelector('form')!.removeEventListener('submit', onSubmit);
+    }
+    promptCancel.addEventListener('click', onCancel);
+    promptDialog.addEventListener('cancel', onEsc);
+    promptDialog.querySelector('form')!.addEventListener('submit', onSubmit);
+    promptDialog.showModal();
+    promptInput.select();
+  });
+}
+
+const confirmDialog = document.getElementById('confirm-dialog') as HTMLDialogElement;
+const confirmTitle = document.getElementById('confirm-title')!;
+const confirmMessage = document.getElementById('confirm-message')!;
+const confirmCancel = document.getElementById('confirm-cancel')!;
+
+function askConfirm(message: string, title = 'Confirm'): Promise<boolean> {
+  return new Promise((resolve) => {
+    confirmTitle.textContent = title;
+    confirmMessage.textContent = message;
+    let resolved = false;
+    const finish = (value: boolean) => {
+      if (resolved) return;
+      resolved = true;
+      confirmDialog.close();
+      cleanup();
+      resolve(value);
+    };
+    const onCancel = () => finish(false);
+    const onSubmit = (e: Event) => { e.preventDefault(); finish(true); };
+    const onEsc = () => finish(false);
+    function cleanup() {
+      confirmCancel.removeEventListener('click', onCancel);
+      confirmDialog.removeEventListener('cancel', onEsc);
+      confirmDialog.querySelector('form')!.removeEventListener('submit', onSubmit);
+    }
+    confirmCancel.addEventListener('click', onCancel);
+    confirmDialog.addEventListener('cancel', onEsc);
+    confirmDialog.querySelector('form')!.addEventListener('submit', onSubmit);
+    confirmDialog.showModal();
+  });
+}
+
+// Minimum world size. Below these the camera math breaks:
 // - 15 cols × 132 = 1980 ≥ GAME_W (1920), so camera clamp stays non-negative.
-// - 22 rows preserves HORIZON_Y = 22 * TILE_SIZE in main.ts (sky/tree line).
+// -  9 rows ×  132 = 1188 ≥ GAME_H (1080), same logic vertically.
 const MIN_COLS = 15;
-const MIN_ROWS = 22;
+const MIN_ROWS = 9;
 const MAX_DIM = 500;
 
-document.getElementById('btn-world-size')!.addEventListener('click', () => {
-  const input = prompt(
-    `World size in tiles (cols x rows)\nCurrent: ${COLS} x ${ROWS}\nMin ${MIN_COLS} x ${MIN_ROWS}, max ${MAX_DIM} x ${MAX_DIM}.`,
+document.getElementById('btn-world-size')!.addEventListener('click', async () => {
+  const input = await askText(
+    `World size in tiles (cols x rows). Min ${MIN_COLS} x ${MIN_ROWS}, max ${MAX_DIM} x ${MAX_DIM}.`,
     `${COLS} x ${ROWS}`,
+    'World size',
   );
   if (!input) return;
   const m = input.match(/(\d+)\s*[x×,]\s*(\d+)/i);
@@ -769,18 +833,21 @@ document.getElementById('btn-world-size')!.addEventListener('click', () => {
   const nr = Math.max(MIN_ROWS, Math.min(MAX_DIM, +m[2]));
   if (nc < COLS || nr < ROWS) {
     const lost = countOutside(nc, nr);
-    if (lost > 0 && !confirm(`Shrinking drops ${lost} sprite(s) outside new bounds. Continue?`)) return;
+    if (lost > 0 && !(await askConfirm(
+      `Shrinking drops ${lost} sprite(s) outside new bounds. Continue?`,
+      'Shrink world',
+    ))) return;
   }
   resizeWorld(nc, nr);
   flashStatus(`World resized to ${nc} x ${nr} tiles (${worldW} x ${worldH} px)`);
 });
 
-document.getElementById('btn-clear')!.addEventListener('click', () => {
+document.getElementById('btn-clear')!.addEventListener('click', async () => {
   const label = activeLayer === 'solid' ? 'all tiles'
               : activeLayer === 'back'  ? 'decorations (back)'
               : 'decorations (front)';
-  if (!confirm(`Clear ${label} on this layer?`)) return;
-  if (activeLayer === 'solid') grid.fill(0);
+  if (!(await askConfirm(`Clear ${label} on this layer?`, 'Clear layer'))) return;
+  if (activeLayer === 'solid') { grid.fill(0); grassGrid.fill(0); }
   else activeDecoGrid()!.fill(0);
   draw();
 });
@@ -823,25 +890,32 @@ function flashStatus(msg: string) {
 }
 
 // --- Serialization ---
-// Merge adjacent cells of the *same type* in the same row into strips.
+// Merge adjacent cells of the *same (type, grass)* pair in the same row into
+// strips. Grass cells break the merge so a level with mixed grass/no-grass on
+// the same tile type still serializes into separate platforms.
 function serializeLevel(): LevelFile {
   const platforms: LevelPlatform[] = [];
   for (let cy = 0; cy < ROWS; cy++) {
     let runStart = -1;
     let runType = 0;
+    let runGrass = 0;
     for (let cx = 0; cx <= COLS; cx++) {
       const v = cx < COLS ? getTile(cx, cy) : 0;
-      if (runStart < 0) {
-        if (v !== 0) { runStart = cx; runType = v; }
-      } else if (v !== runType) {
+      const g = cx < COLS ? grassGrid[cellIndex(cx, cy)] : 0;
+      const breakRun = runStart >= 0 && (v !== runType || g !== runGrass);
+      if (breakRun) {
         const typeId = ALL_TYPES[runType - 1]?.id ?? DEFAULT_TILE_ID;
-        platforms.push({
+        const plat: LevelPlatform = {
           x: runStart * TILE, y: cy * TILE,
           width: (cx - runStart) * TILE, height: TILE,
           type: typeId,
-        });
+        };
+        if (runGrass) plat.grass = true;
+        platforms.push(plat);
         runStart = -1;
-        if (v !== 0) { runStart = cx; runType = v; }
+      }
+      if (runStart < 0 && v !== 0) {
+        runStart = cx; runType = v; runGrass = g;
       }
     }
   }
@@ -870,6 +944,7 @@ function serializeDeco(layer: Uint8Array): LevelDecoration[] {
 function loadLevel(data: LevelFile) {
   if (!data) {
     grid.fill(0);
+    grassGrid.fill(0);
     gridBack.fill(0);
     gridFront.fill(0);
     return;
@@ -883,9 +958,13 @@ function loadLevel(data: LevelFile) {
     if (nc !== COLS || nr !== ROWS) resizeWorld(nc, nr);
   }
   grid.fill(0);
+  grassGrid.fill(0);
   gridBack.fill(0);
   gridFront.fill(0);
   if (Array.isArray(data.platforms)) {
+    // setTile reads the current `grassPaint` toggle, so temporarily force it
+    // to match whatever the incoming platform carries rather than the UI state.
+    const prevGrass = grassPaint;
     for (const p of data.platforms) {
       const type = getTileType(p.type);
       const typeIdx = ALL_TYPES.indexOf(type);
@@ -893,10 +972,12 @@ function loadLevel(data: LevelFile) {
       const cy0 = Math.round(p.y / TILE);
       const cw = Math.round(p.width / TILE);
       const ch = Math.max(1, Math.round(p.height / TILE));
+      grassPaint = p.grass === true;
       for (let cy = cy0; cy < cy0 + ch; cy++) {
         for (let cx = cx0; cx < cx0 + cw; cx++) setTile(cx, cy, typeIdx);
       }
     }
+    grassPaint = prevGrass;
   }
   loadDecoLayer(data.decorationsBack, gridBack);
   loadDecoLayer(data.decorationsFront, gridFront);
@@ -940,17 +1021,6 @@ document.addEventListener('click', (e) => {
     if (!m.contains(t)) m.classList.remove('open');
   });
 });
-
-// --- Layer visibility checkboxes (View menu) ---
-for (const key of ['sky', 'clouds', 'trees'] as const) {
-  const cb = document.getElementById(`layer-${key}`) as HTMLInputElement;
-  cb.checked = layerVisibility[key];
-  cb.addEventListener('change', () => {
-    layerVisibility[key] = cb.checked;
-    saveLayerVisibility();
-    draw();
-  });
-}
 
 // Restore last session, or fall back to the bundled default level.
 const saved = localStorage.getItem(LEVEL_STORAGE_KEY);
